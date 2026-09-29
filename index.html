@@ -17,7 +17,6 @@
       border: 1px solid #1e293b; font-size: 11px; line-height: 1.4;
       max-width: 280px; pointer-events: none; backdrop-filter: blur(8px);
     }
-    .active-spike { color: #f43f5e; font-weight: bold; }
 
     #ui-container {
       position: absolute; bottom: 16px; left: 0; width: 100vw;
@@ -60,77 +59,75 @@
     let flyVel = new THREE.Vector3(0, 0, 0);
 
     // ==========================================
-    // 🧠 БИОФИЗИЧЕСКАЯ ИМПУЛЬСНАЯ НЕЙРОСЕТЬ (SNN)
+    // 🧠 УВЕЛИЧЕННАЯ НЕЙРОСЕТЬ SNN (512 НЕЙРОНОВ)
     // ==========================================
-    const NUM_SENSORY = 20;  // Сенсорные нейроны глаз
-    const NUM_INTER = 40;    // Интернейроны (Giant Fiber Escape Circuit)
-    const NUM_MOTOR = 4;     // Моторные нейроны крыльев и лап
+    const NUM_SENSORY = 120;  // Фасетки глаз (Optic Lobe)
+    const NUM_INTER = 380;    // Главные интернейроны (Lobula Plate & Central Complex)
+    const NUM_MOTOR = 12;     // Моторные нейроны крыльев и ориентации
     const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR;
 
-    // Параметры модели нейрона LIF (Leaky Integrate-and-Fire)
-    const V_REST = -70.0;     // Потенциал покоя (мВ)
-    const V_THRESH = -50.0;   // Порог спайка (мВ)
-    const V_RESET = -75.0;    // Потенциал сброса после спайка (мВ)
-    const DECAY = 0.88;       // Утечка заряда (мембранное сопротивление)
+    const V_REST = -70.0;
+    const V_THRESH = -50.0;
+    const V_RESET = -75.0;
+    const DECAY = 0.85;
 
-    let V = new Float32Array(TOTAL_NEURONS);       // Мембранное напряжение
-    let I_ext = new Float32Array(TOTAL_NEURONS);   // Внешний ток
-    let W = [];                                    // Матрица синаптических весов (Коннектом)
+    let V = new Float32Array(TOTAL_NEURONS);
+    let I_ext = new Float32Array(TOTAL_NEURONS);
+    let W = [];
     let totalSpikes = 0;
     let motorSpikeActive = false;
 
-    // Генерируем структуру синапсов на основе графа коннектома Giant Fiber
     function initConnectomeWeights() {
       W = Array.from({ length: TOTAL_NEURONS }, () => new Float32Array(TOTAL_NEURONS));
 
-      // 1. Связи Глаза -> Интернейроны (Возбуждающие синапсы)
+      // Глаза -> Интернейроны
       for (let i = 0; i < NUM_SENSORY; i++) {
         for (let j = NUM_SENSORY; j < NUM_SENSORY + NUM_INTER; j++) {
-          W[i][j] = Math.random() * 8.0 + 2.0; 
+          if (Math.random() < 0.15) { // 15% плотность синапсов
+            W[i][j] = Math.random() * 6.0 + 1.0;
+          }
         }
       }
 
-      // 2. Внутренние связи Интернейронов (Тормозные и возбуждающие контуры)
+      // Внутренние связи слоёв мозга
       for (let i = NUM_SENSORY; i < NUM_SENSORY + NUM_INTER; i++) {
         for (let j = NUM_SENSORY; j < NUM_SENSORY + NUM_INTER; j++) {
-          if (i !== j) W[i][j] = (Math.random() - 0.4) * 5.0;
+          if (i !== j && Math.random() < 0.08) {
+            W[i][j] = (Math.random() - 0.45) * 4.0;
+          }
         }
       }
 
-      // 3. Интернейроны -> Моторные нейроны (Прямой импульс на взлёт)
+      // Интернейроны -> Моторная кора
       for (let i = NUM_SENSORY; i < NUM_SENSORY + NUM_INTER; i++) {
         for (let m = 0; m < NUM_MOTOR; m++) {
-          W[i][NUM_SENSORY + NUM_INTER + m] = Math.random() * 12.0 + 5.0;
+          if (Math.random() < 0.2) {
+            W[i][NUM_SENSORY + NUM_INTER + m] = Math.random() * 8.0 + 2.0;
+          }
         }
       }
 
-      // Инициализация напряжений
       for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
     }
 
-    // Симуляция одного шага биофизики мозга
     function updateSNN(dt) {
       let currentSpikes = 0;
       motorSpikeActive = false;
 
-      // 1. Учет утечки и обновление мембран
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
-        I_ext[i] = 0; // Сброс внешнего тока
+        I_ext[i] = 0;
       }
 
-      // 2. Проверка генерации спайков
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         if (V[i] >= V_THRESH) {
-          V[i] = V_RESET; // Сброс нейрона
+          V[i] = V_RESET;
           currentSpikes++;
 
-          // Распространение волны тока по синапсам к другим нейронам
           for (let j = 0; j < TOTAL_NEURONS; j++) {
-            I_ext[j] += W[i][j];
+            if (W[i][j] !== 0) I_ext[j] += W[i][j];
           }
 
-          // Если сработал моторный нейрон
           if (i >= NUM_SENSORY + NUM_INTER) {
             motorSpikeActive = true;
           }
@@ -143,11 +140,13 @@
 
     function resetBrain() {
       for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
+      flyPos.set(0, 0, 0);
+      flyVel.set(0, 0, 0);
       document.getElementById('brain-status').innerText = 'Сброшен!';
     }
 
     // ==========================================
-    // 🎨 3D ГРАФИКА И СЦЕНА THREE.JS
+    // 🎨 3D ГРАФИКА
     // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
@@ -171,9 +170,9 @@
       initConnectomeWeights();
 
       document.getElementById('net-count').innerText = TOTAL_NEURONS;
-      document.getElementById('brain-status').innerText = 'СЕТЬ АКТИВНА';
 
       container.addEventListener('pointermove', handlePointer);
+      container.addEventListener('pointerdown', handlePointer);
       window.addEventListener('resize', onWindowResize);
 
       animate();
@@ -185,22 +184,22 @@
       const eyeMat = new THREE.MeshStandardMaterial({ color: 0xef4444 });
       const wingMat = new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.6 });
 
-      const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), bodyMat);
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.4, 12, 12), bodyMat);
       body.scale.set(0.8, 0.7, 1.2);
       flyGroup.add(body);
 
-      const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), eyeMat);
-      eyeL.position.set(-0.22, 0.1, 0.45);
+      const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.15, 10, 10), eyeMat);
+      eyeL.position.set(-0.18, 0.08, 0.35);
       const eyeR = eyeL.clone();
-      eyeR.position.x = 0.22;
+      eyeR.position.x = 0.18;
       flyGroup.add(eyeL); flyGroup.add(eyeR);
 
-      const wingGeo = new THREE.BoxGeometry(0.6, 0.01, 1.0);
-      wingGeo.translate(0.3, 0, -0.4);
+      const wingGeo = new THREE.BoxGeometry(0.5, 0.01, 0.8);
+      wingGeo.translate(0.25, 0, -0.3);
       leftWing = new THREE.Mesh(wingGeo, wingMat);
-      leftWing.position.set(-0.1, 0.25, 0);
+      leftWing.position.set(-0.08, 0.2, 0);
       rightWing = new THREE.Mesh(wingGeo, wingMat);
-      rightWing.position.set(0.1, 0.25, 0);
+      rightWing.position.set(0.08, 0.2, 0);
       rightWing.scale.x = -1;
 
       flyGroup.add(leftWing); flyGroup.add(rightWing);
@@ -219,62 +218,80 @@
       pointerPos = camera.position.clone().add(dir.multiplyScalar(dist));
     }
 
+    function getScreenBounds() {
+      const vFOV = THREE.MathUtils.degToRad(camera.fov);
+      const height = 2 * Math.tan(vFOV / 2) * camera.position.z;
+      const width = height * camera.aspect;
+      return { x: (width / 2) - 0.5, y: (height / 2) - 0.8 };
+    }
+
     function animate() {
       requestAnimationFrame(animate);
-      const delta = clock.getDelta();
+      const delta = Math.min(clock.getDelta(), 0.1);
       const time = clock.getElapsedTime();
 
-      // 1. Подача внешнего тока в сенсорные нейроны (Зрение)
+      const bounds = getScreenBounds();
+
+      // Стимуляция сенсорных нейронов глаз
       const distToPointer = flyPos.distanceTo(pointerPos);
       let leftSensoryCurrent = 0, rightSensoryCurrent = 0;
 
-      if (distToPointer < 3.5) {
-        // Чем ближе палец, тем выше мВ поступает на фасетки глаза
-        const stimulation = (3.5 - distToPointer) * 12.0;
+      if (distToPointer < 3.0) {
+        const stimulation = (3.0 - distToPointer) * 10.0;
         leftSensoryCurrent = stimulation;
         rightSensoryCurrent = stimulation;
 
-        // Запихиваем ток в первых 20 нейронов
         for (let i = 0; i < NUM_SENSORY / 2; i++) I_ext[i] += leftSensoryCurrent;
         for (let i = NUM_SENSORY / 2; i < NUM_SENSORY; i++) I_ext[i] += rightSensoryCurrent;
       }
 
-      // 2. Просчет шага импульсной нейросети (SNN)
+      // Если близко к краю — подаём сигналы в нейроны разворота
+      if (Math.abs(flyPos.x) > bounds.x * 0.7 || Math.abs(flyPos.y) > bounds.y * 0.7) {
+        for (let i = 0; i < NUM_SENSORY; i++) I_ext[i] += 4.0;
+      }
+
       const spikesCount = updateSNN(delta);
 
-      // 3. Реакция тела на моторные спайки
+      // Реакция на движения
       if (motorSpikeActive) {
-        // Моторный нейрон выдал импульс -> резкий предвзлетный прыжок по физике!
-        const escapeDir = flyPos.clone().sub(pointerPos).normalize().add(new THREE.Vector3(0, 0.2, 0));
-        flyVel.add(escapeDir.multiplyScalar(6.0 * delta));
+        const escapeDir = flyPos.clone().sub(pointerPos).normalize();
+        flyVel.add(escapeDir.multiplyScalar(2.5 * delta)); // Умеренная скорость
         
-        leftWing.rotation.y = Math.sin(time * 60) * 0.7;
-        rightWing.rotation.y = -Math.sin(time * 60) * 0.7;
-        document.getElementById('brain-status').innerText = '⚠️ РЕФЛЕКС ВЗЛЁТА!';
+        leftWing.rotation.y = Math.sin(time * 50) * 0.6;
+        rightWing.rotation.y = -Math.sin(time * 50) * 0.6;
+        document.getElementById('brain-status').innerText = '⚠️️ РЕФЛЕКС ВЗЛЁТА!';
       } else {
-        // Обычный пассивный полет при низком потенциале
-        flyVel.x += Math.sin(time * 3) * 0.05;
-        flyVel.y += Math.cos(time * 2) * 0.05;
-        flyVel.multiplyScalar(0.95);
+        // Плавающий пассивный полет
+        flyVel.x += Math.sin(time * 2.5) * 0.015;
+        flyVel.y += Math.cos(time * 2.0) * 0.015;
+        flyVel.multiplyScalar(0.92); // Торможение
         
-        leftWing.rotation.y = Math.sin(time * 15) * 0.2;
-        rightWing.rotation.y = -Math.sin(time * 15) * 0.2;
+        leftWing.rotation.y = Math.sin(time * 12) * 0.2;
+        rightWing.rotation.y = -Math.sin(time * 12) * 0.2;
         document.getElementById('brain-status').innerText = 'ПОКОЙ / ПОИСК';
       }
 
+      // Твёрдые физические границы с мягким возвратом
+      if (Math.abs(flyPos.x) > bounds.x) {
+        flyPos.x = Math.sign(flyPos.x) * bounds.x;
+        flyVel.x *= -0.3;
+      }
+      if (Math.abs(flyPos.y) > bounds.y) {
+        flyPos.y = Math.sign(flyPos.y) * bounds.y;
+        flyVel.y *= -0.3;
+      }
+
       flyPos.add(flyVel);
-      
-      // Границы
-      if (Math.abs(flyPos.x) > 3.5) { flyPos.x = Math.sign(flyPos.x) * 3.5; flyVel.x *= -0.5; }
-      if (Math.abs(flyPos.y) > 2.5) { flyPos.y = Math.sign(flyPos.y) * 2.5; flyVel.y *= -0.5; }
-
       flyMesh.position.copy(flyPos);
-      if (flyVel.length() > 0.01) flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
 
-      // Телеметрия
-      document.getElementById('spike-rate').innerText = spikesCount * 30;
+      if (flyVel.length() > 0.005) {
+        flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
+      }
+
+      // Обновление UI
+      document.getElementById('spike-rate').innerText = spikesCount * 20;
       document.getElementById('sensory-val').innerText = `${leftSensoryCurrent.toFixed(1)} / ${rightSensoryCurrent.toFixed(1)}`;
-      document.getElementById('motor-val').innerText = motorSpikeActive ? 'SPIKE (HIGH)' : 'IDLE';
+      document.getElementById('motor-val').innerText = motorSpikeActive ? 'SPIKE' : 'IDLE';
 
       renderer.render(scene, camera);
     }

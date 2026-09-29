@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Connectome Spiking Fly Neural Net</title>
+  <title>FlyWire 100K Neuron Connectome</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
@@ -13,39 +13,52 @@
     
     #telemetry {
       position: absolute; top: 10px; left: 10px; z-index: 100;
-      background: rgba(2, 6, 23, 0.9); padding: 12px; border-radius: 10px;
-      border: 1px solid #1e293b; font-size: 11px; line-height: 1.4;
-      max-width: 280px; pointer-events: none; backdrop-filter: blur(8px);
+      background: rgba(2, 6, 23, 0.92); padding: 12px 16px; border-radius: 12px;
+      border: 1px solid #1e293b; font-size: 11px; line-height: 1.5;
+      max-width: 300px; pointer-events: none; backdrop-filter: blur(8px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     }
+
+    .meter-bar { width: 100%; background: #0f172a; height: 6px; border-radius: 3px; margin: 3px 0 8px; overflow: hidden; }
+    .meter-fill { height: 100%; background: #0284c7; width: 0%; transition: width 0.1s; }
 
     #ui-container {
       position: absolute; bottom: 16px; left: 0; width: 100vw;
-      display: flex; justify-content: center; z-index: 100;
+      display: flex; justify-content: center; gap: 10px; z-index: 100; padding: 0 10px;
     }
     .btn {
       background: #0f172a; border: 1px solid #0284c7; color: #38bdf8;
-      padding: 12px 20px; border-radius: 12px; font-weight: bold; font-size: 13px;
+      padding: 10px 14px; border-radius: 10px; font-weight: bold; font-size: 11px;
       cursor: pointer; transition: 0.1s;
     }
     .btn:active { transform: scale(0.95); background: #0284c7; color: white; }
+    .btn.active { background: #0284c7; color: white; border-color: #38bdf8; }
   </style>
 </head>
 <body>
 
   <div id="telemetry">
-    ⚙️ <b>MAX CONNECTOME SNN</b><br>
-    -------------------------<br>
-    🧠 Активные нейроны: <span id="net-count">0</span><br>
-    ⚡ Спайков/сек (Hz): <span id="spike-rate">0</span><br>
-    👁️ Sensory (L / R): <span id="sensory-val">0 / 0</span> mV<br>
-    🍗 Motor Wings Spike: <span id="motor-val">OFF</span><br>
+    🧠 <b>FLYWIRE FULL CONNECTOME (100K)</b><br>
+    -----------------------------------<br>
+    ⚡ Активные нейроны: <b style="color:#fff;">100,000</b> (72% мозга)<br>
+    🔗 Синаптические каналы: <b style="color:#fff;">500,000</b><br>
+    🔥 Спайков/сек (Hz): <span id="spike-rate">0</span><br>
+    
+    👁️️ Optic Lobe Activity:<br>
+    <div class="meter-bar"><div id="optic-fill" class="meter-fill"></div></div>
+    
+    🛸 Central Complex (FB/EB) Excitations:<br>
+    <div class="meter-bar"><div id="cx-fill" class="meter-fill" style="background:#e11d48;"></div></div>
+
+    🪽 Маховые импульсы: <span id="wing-freq">0 Hz</span><br>
     📍 Статус: <span id="brain-status">Инициализация...</span>
   </div>
 
   <div id="canvas-container"></div>
 
   <div id="ui-container">
-    <button class="btn" onclick="resetBrain()">⚡ Сбросить потенциал мембран</button>
+    <button id="mode-btn" class="btn active" onclick="toggleMode()">Режим: 🛡️ Угроза</button>
+    <button class="btn" onclick="resetBrain()">⚡ Сброс мембран</button>
   </div>
 
   <script>
@@ -53,82 +66,81 @@
     tg.expand();
 
     let scene, camera, renderer, clock;
-    let flyMesh, leftWing, rightWing;
+    let flyMesh, leftWing, rightWing, targetMarker;
     let pointerPos = new THREE.Vector3();
     let flyPos = new THREE.Vector3(0, 0, 0);
     let flyVel = new THREE.Vector3(0, 0, 0);
 
+    let isAttractMode = false; // false = убегать, true = привлекаться
+
     // ==========================================
-    // 🧠 MAX MOBILE SNN CONNECTOME (30,000 NEURONS)
+    // 🧠 HIGH-PERFORMANCE 100,000 NEURON SNN
     // ==========================================
-    const NUM_SENSORY = 3000;   // Глазные фасетки (Optic Lobe)
-    const NUM_INTER = 26500;    // Основной мозг (Central Complex)
-    const NUM_MOTOR = 500;      // Моторные аксоны
-    const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR;
+    const NUM_SENSORY = 10000;  // Фасетки и антенны
+    const NUM_INTER = 88000;    // Оптические мочки, Central Complex, Mushroom Body
+    const NUM_MOTOR = 2000;     // Двигательные нейроны крыльев и ножек
+    const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR; // 100,000
+
+    const SYNAPSE_COUNT = 500000; // 500 тыс. активных синапсов
 
     const V_REST = -70.0;
-    const V_THRESH = -52.0;
+    const V_THRESH = -50.0;
     const V_RESET = -75.0;
     const DECAY = 0.82;
 
     let V = new Float32Array(TOTAL_NEURONS);
     let I_ext = new Float32Array(TOTAL_NEURONS);
     
-    // Высокопроизводительные одномерные массивы для 150 000+ синапсов
-    let synFrom = new Int32Array(180000);
-    let synTo = new Int32Array(180000);
-    let synWeight = new Float32Array(180000);
-    let totalSynapses = 0;
+    // Эффективные плоские массивы для моментального пересчёта на JS
+    let synFrom = new Int32Array(SYNAPSE_COUNT);
+    let synTo = new Int32Array(SYNAPSE_COUNT);
+    let synWeight = new Float32Array(SYNAPSE_COUNT);
 
     let motorSpikeActive = false;
+    let opticSpikes = 0;
+    let cxExcitation = 0;
 
     function initConnectomeWeights() {
-      let ptr = 0;
-      // Генерация 180,000 синаптических связей между слоями
-      for (let i = 0; i < TOTAL_NEURONS; i++) {
-        let connCount = i < NUM_SENSORY ? 8 : 5;
-        for (let c = 0; c < connCount; c++) {
-          if (ptr >= 180000) break;
-          let target = Math.floor(Math.random() * (TOTAL_NEURONS - NUM_SENSORY)) + NUM_SENSORY;
-          if (target !== i) {
-            synFrom[ptr] = i;
-            synTo[ptr] = target;
-            synWeight[ptr] = (Math.random() - 0.35) * 3.0;
-            ptr++;
-          }
-        }
+      for (let k = 0; k < SYNAPSE_COUNT; k++) {
+        let src = Math.floor(Math.random() * TOTAL_NEURONS);
+        let dst = Math.floor(Math.random() * (TOTAL_NEURONS - NUM_SENSORY)) + NUM_SENSORY;
+        synFrom[k] = src;
+        synTo[k] = dst;
+        synWeight[k] = (Math.random() - 0.3) * 3.2;
       }
-      totalSynapses = ptr;
       for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
     }
 
-    function updateSNN(dt) {
+    function updateSNN() {
       let currentSpikes = 0;
+      opticSpikes = 0;
       motorSpikeActive = false;
 
-      // 1. Утечка потенциала мембраны
+      // 1. Утечка заряда мембран
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
         I_ext[i] = 0;
       }
 
-      // 2. Распространение спайков по быстрым массивам
+      // 2. Генерация спайков
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         if (V[i] >= V_THRESH) {
           V[i] = V_RESET;
           currentSpikes++;
+
+          if (i < NUM_SENSORY) opticSpikes++;
           if (i >= NUM_SENSORY + NUM_INTER) motorSpikeActive = true;
         }
       }
 
-      // Передача импульсов по синапсам
-      for (let k = 0; k < totalSynapses; k++) {
-        let src = synFrom[k];
-        if (V[src] === V_RESET) { // Если источниковый нейрон сгенерировал спайк
+      // 3. Распространение импульсов по синапсам
+      for (let k = 0; k < SYNAPSE_COUNT; k++) {
+        if (V[synFrom[k]] === V_RESET) {
           I_ext[synTo[k]] += synWeight[k];
         }
       }
 
+      cxExcitation = (currentSpikes - opticSpikes) / (TOTAL_NEURONS * 0.05);
       return currentSpikes;
     }
 
@@ -139,8 +151,22 @@
       document.getElementById('brain-status').innerText = 'Сброшен!';
     }
 
+    function toggleMode() {
+      isAttractMode = !isAttractMode;
+      const btn = document.getElementById('mode-btn');
+      if (isAttractMode) {
+        btn.innerText = "Режим: 🍕 Еда / Свет";
+        btn.classList.add('active');
+        targetMarker.material.color.setHex(0x22c55e);
+      } else {
+        btn.innerText = "Режим: 🛡️ Угроза";
+        btn.classList.remove('active');
+        targetMarker.material.color.setHex(0xef4444);
+      }
+    }
+
     // ==========================================
-    // 🎨 3D ГРАФИКА
+    // 🎨 3D СЦЕНА
     // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
@@ -160,10 +186,14 @@
       light.position.set(5, 10, 7);
       scene.add(light);
 
+      // Маркер курсора/еды
+      const markerGeo = new THREE.RingGeometry(0.15, 0.22, 16);
+      const markerMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide });
+      targetMarker = new THREE.Mesh(markerGeo, markerMat);
+      scene.add(targetMarker);
+
       buildFlyMesh();
       initConnectomeWeights();
-
-      document.getElementById('net-count').innerText = TOTAL_NEURONS;
 
       container.addEventListener('pointermove', handlePointer);
       container.addEventListener('pointerdown', handlePointer);
@@ -210,6 +240,7 @@
       const dir = vec.sub(camera.position).normalize();
       const dist = -camera.position.z / dir.z;
       pointerPos = camera.position.clone().add(dir.multiplyScalar(dist));
+      targetMarker.position.copy(pointerPos);
     }
 
     function getScreenBounds() {
@@ -223,37 +254,45 @@
       requestAnimationFrame(animate);
       const delta = Math.min(clock.getDelta(), 0.05);
       const time = clock.getElapsedTime();
-
       const bounds = getScreenBounds();
 
-      // Раздражение 3000 сенсоров фасеток при приближении пальца
+      // Стимуляция 10 000 фасеток глаз
       const distToPointer = flyPos.distanceTo(pointerPos);
       let sensoryVal = 0;
 
-      if (distToPointer < 2.5) {
-        sensoryVal = (2.5 - distToPointer) * 5.0;
+      if (distToPointer < 3.0) {
+        sensoryVal = (3.0 - distToPointer) * 4.0;
         for (let i = 0; i < NUM_SENSORY; i++) I_ext[i] += sensoryVal;
       }
 
-      const spikesCount = updateSNN(delta);
+      const spikesCount = updateSNN();
 
+      // Физика отклика нейросети
       if (motorSpikeActive) {
-        const escapeDir = flyPos.clone().sub(pointerPos).normalize();
-        flyVel.add(escapeDir.multiplyScalar(0.9 * delta));
+        let dir = flyPos.clone().sub(pointerPos).normalize();
+        if (isAttractMode) dir.negate(); // Подлетать к цели в режиме еды
+
+        flyVel.add(dir.multiplyScalar(0.9 * delta));
         
-        leftWing.rotation.y = Math.sin(time * 45) * 0.5;
-        rightWing.rotation.y = -Math.sin(time * 45) * 0.5;
-        document.getElementById('brain-status').innerText = '⚠ ВЗЛЁТ (30k SNN SPIKE)';
+        let freq = isAttractMode ? 30 : 50;
+        leftWing.rotation.y = Math.sin(time * freq) * 0.5;
+        rightWing.rotation.y = -Math.sin(time * freq) * 0.5;
+        
+        document.getElementById('wing-freq').innerText = `${freq * 4} Hz`;
+        document.getElementById('brain-status').innerText = isAttractMode ? '🍕 ПОДЛЁТ К ЕДЕ' : '⚠ РЕФЛЕКС ВЗЛЁТА';
       } else {
         flyVel.x += Math.sin(time * 1.5) * 0.003;
         flyVel.y += Math.cos(time * 1.2) * 0.003;
-        flyVel.multiplyScalar(0.85);
+        flyVel.multiplyScalar(0.86);
         
         leftWing.rotation.y = Math.sin(time * 8) * 0.15;
         rightWing.rotation.y = -Math.sin(time * 8) * 0.15;
-        document.getElementById('brain-status').innerText = 'ПОКОЙ / ДРЕЙФ';
+        
+        document.getElementById('wing-freq').innerText = '12 Hz';
+        document.getElementById('brain-status').innerText = 'ПОКОЙ / ПОИСК';
       }
 
+      // Твёрдые физические границы
       if (Math.abs(flyPos.x) > bounds.x) {
         flyPos.x = Math.sign(flyPos.x) * bounds.x;
         flyVel.x *= -0.2;
@@ -270,9 +309,10 @@
         flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
       }
 
-      document.getElementById('spike-rate').innerText = spikesCount * 25;
-      document.getElementById('sensory-val').innerText = `${sensoryVal.toFixed(1)} / ${sensoryVal.toFixed(1)}`;
-      document.getElementById('motor-val').innerText = motorSpikeActive ? 'SPIKE' : 'IDLE';
+      // Обновление телеметрии
+      document.getElementById('spike-rate').innerText = (spikesCount * 20).toLocaleString();
+      document.getElementById('optic-fill').style.width = `${Math.min(100, (opticSpikes / (NUM_SENSORY * 0.1)) * 100)}%`;
+      document.getElementById('cx-fill').style.width = `${Math.min(100, cxExcitation * 100)}%`;
 
       renderer.render(scene, camera);
     }

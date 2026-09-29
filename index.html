@@ -3,63 +3,50 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>IRL Fly Biology Sandbox</title>
+  <title>Connectome Spiking Fly Neural Net</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    body { margin: 0; overflow: hidden; background: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: white; user-select: none; }
+    body { margin: 0; overflow: hidden; background: #020617; font-family: monospace; color: #38bdf8; user-select: none; }
     #canvas-container { width: 100vw; height: 100vh; touch-action: none; }
     
-    /* Меню с поддержкой свайпа на Android */
-    #ui-container {
-      position: absolute; bottom: 12px; left: 0; width: 100vw;
-      display: flex; justify-content: center; z-index: 100; pointer-events: none;
+    #telemetry {
+      position: absolute; top: 10px; left: 10px; z-index: 100;
+      background: rgba(2, 6, 23, 0.9); padding: 12px; border-radius: 10px;
+      border: 1px solid #1e293b; font-size: 11px; line-height: 1.4;
+      max-width: 280px; pointer-events: none; backdrop-filter: blur(8px);
     }
-    
-    #ui {
-      pointer-events: auto; display: flex; gap: 8px; background: rgba(15, 23, 42, 0.92);
-      padding: 10px 14px; border-radius: 20px; backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 255, 255, 0.15); max-width: 94vw;
-      overflow-x: auto; scrollbar-width: none; touch-action: pan-x;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
-    }
-    #ui::-webkit-scrollbar { display: none; }
-    
-    .btn {
-      background: #1e293b; border: 1px solid #334155; color: white;
-      padding: 10px 14px; border-radius: 12px; font-size: 13px; font-weight: 700;
-      display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap;
-      flex-shrink: 0; transition: transform 0.1s ease, background 0.2s ease;
-    }
-    .btn:active { transform: scale(0.94); }
-    .btn.active { background: #2563eb; border-color: #60a5fa; }
-    .btn-poop.active { background: #78350f; border-color: #d97706; }
-    .btn-tape.active { background: #854d0e; border-color: #f59e0b; }
-    .btn-shock.active { background: #dc2626; border-color: #f87171; }
+    .active-spike { color: #f43f5e; font-weight: bold; }
 
-    #status {
-      position: absolute; top: 12px; left: 12px; z-index: 100;
-      background: rgba(15, 23, 42, 0.85); padding: 8px 14px; border-radius: 12px;
-      font-size: 11px; font-weight: 700; border: 1px solid rgba(255,255,255,0.1);
-      letter-spacing: 0.5px; backdrop-filter: blur(8px);
+    #ui-container {
+      position: absolute; bottom: 16px; left: 0; width: 100vw;
+      display: flex; justify-content: center; z-index: 100;
     }
+    .btn {
+      background: #0f172a; border: 1px solid #0284c7; color: #38bdf8;
+      padding: 12px 20px; border-radius: 12px; font-weight: bold; font-size: 13px;
+      cursor: pointer; transition: 0.1s;
+    }
+    .btn:active { transform: scale(0.95); background: #0284c7; color: white; }
   </style>
 </head>
 <body>
 
-  <div id="status">🪰 СОСТОЯНИЕ: ИССЛЕДОВАНИЕ | HP: 100%</div>
+  <div id="telemetry">
+    ⚙️ <b>FLYWIRE CONNECTOME SNN</b><br>
+    -------------------------<br>
+    🧠 Активные нейроны: <span id="net-count">0</span><br>
+    ⚡ Спайков/сек (Hz): <span id="spike-rate">0</span><br>
+    👁️ Sensory (L / R): <span id="sensory-val">0 / 0</span> mV<br>
+    🍗 Motor Wings Spike: <span id="motor-val">OFF</span><br>
+    📍 Статус: <span id="brain-status">Инициализация...</span>
+  </div>
+
   <div id="canvas-container"></div>
 
   <div id="ui-container">
-    <div id="ui">
-      <button class="btn active" id="btn-touch" onclick="setMode('touch')">👈 Пугать пальцем</button>
-      <button class="btn btn-poop" id="btn-poop" onclick="setMode('poop')">💩 Еда (Запах)</button>
-      <button class="btn btn-tape" id="btn-tape" onclick="setMode('tape')">🪰 Липкая лента</button>
-      <button class="btn btn-shock" id="btn-shock" onclick="setMode('shock')">⚡ Шокер</button>
-      <button class="btn" onclick="respawnFly()">🔄 Респавн</button>
-      <button class="btn" onclick="spawnFly()">🪰 +1 Муха</button>
-    </div>
+    <button class="btn" onclick="resetBrain()">⚡ Сбросить потенциал мембран</button>
   </div>
 
   <script>
@@ -67,153 +54,158 @@
     tg.expand();
 
     let scene, camera, renderer, clock;
-    let flies = [];
-    let currentMode = 'touch';
+    let flyMesh, leftWing, rightWing;
     let pointerPos = new THREE.Vector3();
-    let poopMesh = null, tapeMesh = null;
+    let flyPos = new THREE.Vector3(0, 0, 0);
+    let flyVel = new THREE.Vector3(0, 0, 0);
 
-    // Звуковой движок
-    let audioCtx = null, buzzOsc = null, buzzGain = null;
+    // ==========================================
+    // 🧠 БИОФИЗИЧЕСКАЯ ИМПУЛЬСНАЯ НЕЙРОСЕТЬ (SNN)
+    // ==========================================
+    const NUM_SENSORY = 20;  // Сенсорные нейроны глаз
+    const NUM_INTER = 40;    // Интернейроны (Giant Fiber Escape Circuit)
+    const NUM_MOTOR = 4;     // Моторные нейроны крыльев и лап
+    const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR;
 
-    function initAudio() {
-      if (audioCtx) return;
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      buzzOsc = audioCtx.createOscillator();
-      buzzGain = audioCtx.createGain();
-      buzzOsc.type = 'sawtooth';
-      buzzOsc.frequency.setValueAtTime(160, audioCtx.currentTime);
-      buzzGain.gain.setValueAtTime(0.01, audioCtx.currentTime);
-      buzzOsc.connect(buzzGain);
-      buzzGain.connect(audioCtx.destination);
-      buzzOsc.start();
+    // Параметры модели нейрона LIF (Leaky Integrate-and-Fire)
+    const V_REST = -70.0;     // Потенциал покоя (мВ)
+    const V_THRESH = -50.0;   // Порог спайка (мВ)
+    const V_RESET = -75.0;    // Потенциал сброса после спайка (мВ)
+    const DECAY = 0.88;       // Утечка заряда (мембранное сопротивление)
+
+    let V = new Float32Array(TOTAL_NEURONS);       // Мембранное напряжение
+    let I_ext = new Float32Array(TOTAL_NEURONS);   // Внешний ток
+    let W = [];                                    // Матрица синаптических весов (Коннектом)
+    let totalSpikes = 0;
+    let motorSpikeActive = false;
+
+    // Генерируем структуру синапсов на основе графа коннектома Giant Fiber
+    function initConnectomeWeights() {
+      W = Array.from({ length: TOTAL_NEURONS }, () => new Float32Array(TOTAL_NEURONS));
+
+      // 1. Связи Глаза -> Интернейроны (Возбуждающие синапсы)
+      for (let i = 0; i < NUM_SENSORY; i++) {
+        for (let j = NUM_SENSORY; j < NUM_SENSORY + NUM_INTER; j++) {
+          W[i][j] = Math.random() * 8.0 + 2.0; 
+        }
+      }
+
+      // 2. Внутренние связи Интернейронов (Тормозные и возбуждающие контуры)
+      for (let i = NUM_SENSORY; i < NUM_SENSORY + NUM_INTER; i++) {
+        for (let j = NUM_SENSORY; j < NUM_SENSORY + NUM_INTER; j++) {
+          if (i !== j) W[i][j] = (Math.random() - 0.4) * 5.0;
+        }
+      }
+
+      // 3. Интернейроны -> Моторные нейроны (Прямой импульс на взлёт)
+      for (let i = NUM_SENSORY; i < NUM_SENSORY + NUM_INTER; i++) {
+        for (let m = 0; m < NUM_MOTOR; m++) {
+          W[i][NUM_SENSORY + NUM_INTER + m] = Math.random() * 12.0 + 5.0;
+        }
+      }
+
+      // Инициализация напряжений
+      for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
     }
 
+    // Симуляция одного шага биофизики мозга
+    function updateSNN(dt) {
+      let currentSpikes = 0;
+      motorSpikeActive = false;
+
+      // 1. Учет утечки и обновление мембран
+      for (let i = 0; i < TOTAL_NEURONS; i++) {
+        V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
+        I_ext[i] = 0; // Сброс внешнего тока
+      }
+
+      // 2. Проверка генерации спайков
+      for (let i = 0; i < TOTAL_NEURONS; i++) {
+        if (V[i] >= V_THRESH) {
+          V[i] = V_RESET; // Сброс нейрона
+          currentSpikes++;
+
+          // Распространение волны тока по синапсам к другим нейронам
+          for (let j = 0; j < TOTAL_NEURONS; j++) {
+            I_ext[j] += W[i][j];
+          }
+
+          // Если сработал моторный нейрон
+          if (i >= NUM_SENSORY + NUM_INTER) {
+            motorSpikeActive = true;
+          }
+        }
+      }
+
+      totalSpikes += currentSpikes;
+      return currentSpikes;
+    }
+
+    function resetBrain() {
+      for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
+      document.getElementById('brain-status').innerText = 'Сброшен!';
+    }
+
+    // ==========================================
+    // 🎨 3D ГРАФИКА И СЦЕНА THREE.JS
+    // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
       clock = new THREE.Clock();
 
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0f172a);
-      scene.fog = new THREE.FogExp2(0x0f172a, 0.03);
-
       camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(0, 0, 10);
+      camera.position.set(0, 0, 8);
 
       renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       container.appendChild(renderer.domElement);
 
-      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      scene.add(new THREE.AmbientLight(0x38bdf8, 0.6));
       const light = new THREE.DirectionalLight(0xffffff, 1.2);
       light.position.set(5, 10, 7);
       scene.add(light);
 
-      // Задняя стенка (комната)
-      const grid = new THREE.GridHelper(25, 25, 0x3b82f6, 0x1e293b);
-      grid.rotation.x = Math.PI / 2;
-      grid.position.z = -4;
-      scene.add(grid);
+      buildFlyMesh();
+      initConnectomeWeights();
 
-      spawnFly();
+      document.getElementById('net-count').innerText = TOTAL_NEURONS;
+      document.getElementById('brain-status').innerText = 'СЕТЬ АКТИВНА';
 
-      container.addEventListener('pointerdown', (e) => { initAudio(); handlePointer(e); });
-      container.addEventListener('pointermove', (e) => { if (e.buttons > 0) handlePointer(e); });
+      container.addEventListener('pointermove', handlePointer);
       window.addEventListener('resize', onWindowResize);
 
       animate();
     }
 
-    // Анатомическая реалистичная 3D модель
-    function buildCorrectFly() {
+    function buildFlyMesh() {
       const flyGroup = new THREE.Group();
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 });
+      const eyeMat = new THREE.MeshStandardMaterial({ color: 0xef4444 });
+      const wingMat = new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.6 });
 
-      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x111115, roughness: 0.3, metalness: 0.6 });
-      const eyeMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.2 });
-      const wingMat = new THREE.MeshPhysicalMaterial({
-        color: 0xf0f9ff, transmission: 0.9, transparent: true, opacity: 0.7, roughness: 0.1
-      });
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 12), bodyMat);
+      body.scale.set(0.8, 0.7, 1.2);
+      flyGroup.add(body);
 
-      // Брюшко
-      const abdomen = new THREE.Mesh(new THREE.SphereGeometry(0.45, 14, 14), bodyMat);
-      abdomen.scale.set(0.9, 0.8, 1.3);
-      abdomen.position.set(0, 0, -0.5);
-      flyGroup.add(abdomen);
+      const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), eyeMat);
+      eyeL.position.set(-0.22, 0.1, 0.45);
+      const eyeR = eyeL.clone();
+      eyeR.position.x = 0.22;
+      flyGroup.add(eyeL); flyGroup.add(eyeR);
 
-      // Грудь
-      const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.4, 14, 14), bodyMat);
-      flyGroup.add(thorax);
-
-      // Голова
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 14), bodyMat);
-      head.position.set(0, 0, 0.45);
-      flyGroup.add(head);
-
-      // Глаза
-      const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.18, 12, 12), eyeMat);
-      leftEye.position.set(-0.2, 0.08, 0.5);
-      const rightEye = leftEye.clone();
-      rightEye.position.x = 0.2;
-      flyGroup.add(leftEye);
-      flyGroup.add(rightEye);
-
-      // Лапки (Передние для умывания)
-      const legMat = new THREE.MeshBasicMaterial({ color: 0x050505 });
-      const legGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.4);
-      
-      const leftLeg = new THREE.Mesh(legGeo, legMat);
-      leftLeg.position.set(-0.2, -0.2, 0.4);
-      leftLeg.rotation.z = 0.5;
-      
-      const rightLeg = leftLeg.clone();
-      rightLeg.position.x = 0.2;
-      rightLeg.rotation.z = -0.5;
-
-      flyGroup.add(leftLeg);
-      flyGroup.add(rightLeg);
-
-      // Крылья
-      const wingGeo = new THREE.BoxGeometry(0.65, 0.01, 1.1);
-      wingGeo.translate(0.32, 0, -0.45);
-
-      const leftWing = new THREE.Mesh(wingGeo, wingMat);
-      leftWing.position.set(-0.1, 0.3, 0);
-      const rightWing = new THREE.Mesh(wingGeo, wingMat);
-      rightWing.position.set(0.1, 0.3, 0);
+      const wingGeo = new THREE.BoxGeometry(0.6, 0.01, 1.0);
+      wingGeo.translate(0.3, 0, -0.4);
+      leftWing = new THREE.Mesh(wingGeo, wingMat);
+      leftWing.position.set(-0.1, 0.25, 0);
+      rightWing = new THREE.Mesh(wingGeo, wingMat);
+      rightWing.position.set(0.1, 0.25, 0);
       rightWing.scale.x = -1;
 
-      flyGroup.add(leftWing);
-      flyGroup.add(rightWing);
-
-      return {
-        mesh: flyGroup, leftWing, rightWing, leftLeg, rightLeg,
-        pos: new THREE.Vector3(0, 0, 0),
-        vel: new THREE.Vector3(),
-        hp: 100,
-        state: 'FLYING', // FLYING, GROOMING, STUCK, PANIC
-        stateTimer: 0
-      };
-    }
-
-    function spawnFly() {
-      const flyData = buildCorrectFly();
-      flyData.pos.set((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, 0);
-      scene.add(flyData.mesh);
-      flies.push(flyData);
-    }
-
-    function respawnFly() {
-      flies.forEach(f => scene.remove(f.mesh));
-      flies = [];
-      if (poopMesh) { scene.remove(poopMesh); poopMesh = null; }
-      if (tapeMesh) { scene.remove(tapeMesh); tapeMesh = null; }
-      spawnFly();
-    }
-
-    function setMode(mode) {
-      currentMode = mode;
-      document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
-      document.getElementById(`btn-${mode}`)?.classList.add('active');
+      flyGroup.add(leftWing); flyGroup.add(rightWing);
+      flyMesh = flyGroup;
+      scene.add(flyMesh);
     }
 
     function handlePointer(e) {
@@ -225,49 +217,6 @@
       const dir = vec.sub(camera.position).normalize();
       const dist = -camera.position.z / dir.z;
       pointerPos = camera.position.clone().add(dir.multiplyScalar(dist));
-
-      if (currentMode === 'poop') {
-        createPoop(pointerPos);
-      } else if (currentMode === 'tape') {
-        createTape(pointerPos);
-      } else {
-        flies.forEach(fly => {
-          const d = fly.pos.distanceTo(pointerPos);
-          if (currentMode === 'touch' && d < 3.0) {
-            // Рефлекс резкого прыжка назад от движения пальца
-            fly.state = 'PANIC';
-            fly.stateTimer = 1.5;
-            const dodgeDir = fly.pos.clone().sub(pointerPos).normalize().add(new THREE.Vector3(0, 0, 1));
-            fly.vel.add(dodgeDir.multiplyScalar(8.0));
-          } else if (currentMode === 'shock' && d < 2.5) {
-            fly.hp -= 35;
-            fly.vel.add(new THREE.Vector3((Math.random()-0.5)*5, -4, 0));
-          }
-        });
-      }
-    }
-
-    function createPoop(pos) {
-      if (poopMesh) scene.remove(poopMesh);
-      const group = new THREE.Group();
-      const mat = new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.9 });
-      const b1 = new THREE.Mesh(new THREE.SphereGeometry(0.4, 10, 10), mat);
-      const b2 = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10), mat);
-      b2.position.y = 0.3;
-      group.add(b1); group.add(b2);
-      group.position.copy(pos);
-      poopMesh = group;
-      scene.add(poopMesh);
-    }
-
-    function createTape(pos) {
-      if (tapeMesh) scene.remove(tapeMesh);
-      const geo = new THREE.CylinderGeometry(0.15, 0.15, 6, 12);
-      const mat = new THREE.MeshStandardMaterial({ color: 0xca8a04, roughness: 0.1, transparent: true, opacity: 0.8 });
-      tapeMesh = new THREE.Mesh(geo, mat);
-      tapeMesh.position.copy(pos);
-      tapeMesh.position.y = 1; // Свисает сверху
-      scene.add(tapeMesh);
     }
 
     function animate() {
@@ -275,84 +224,57 @@
       const delta = clock.getDelta();
       const time = clock.getElapsedTime();
 
-      const boundX = (camera.aspect * 5.0);
-      const boundY = 3.8;
+      // 1. Подача внешнего тока в сенсорные нейроны (Зрение)
+      const distToPointer = flyPos.distanceTo(pointerPos);
+      let leftSensoryCurrent = 0, rightSensoryCurrent = 0;
 
-      flies.forEach((fly, index) => {
-        if (fly.hp <= 0) {
-          fly.vel.y = -6.0;
-          fly.mesh.rotation.x = Math.PI;
-        } else if (fly.state === 'STUCK') {
-          // Застряла на липкой ленте
-          fly.vel.set(0, 0, 0);
-          fly.leftWing.rotation.y = Math.sin(time * 60) * 0.8; // Вырывается
-          fly.rightWing.rotation.y = 0;
-        } else {
-          // Проверка застревания на ленте
-          if (tapeMesh && fly.pos.distanceTo(tapeMesh.position) < 0.6) {
-            fly.state = 'STUCK';
-          }
+      if (distToPointer < 3.5) {
+        // Чем ближе палец, тем выше мВ поступает на фасетки глаза
+        const stimulation = (3.5 - distToPointer) * 12.0;
+        leftSensoryCurrent = stimulation;
+        rightSensoryCurrent = stimulation;
 
-          // Поведение в полёте
-          if (fly.state === 'PANIC') {
-            fly.stateTimer -= delta;
-            if (fly.stateTimer <= 0) fly.state = 'FLYING';
-          } else if (poopMesh) {
-            // Поиск запаха еды зигзагом
-            const dir = poopMesh.position.clone().sub(fly.pos);
-            if (dir.length() > 0.4) {
-              const zigzag = new THREE.Vector3(Math.sin(time * 12) * 1.5, Math.cos(time * 12) * 1.5, 0);
-              fly.vel.add(dir.normalize().add(zigzag).multiplyScalar(2.0 * delta));
-            } else {
-              // Села на какашку -> переходит к чистке лапок!
-              fly.state = 'GROOMING';
-              fly.stateTimer = 4.0;
-            }
-          }
-
-          if (fly.state === 'GROOMING') {
-            fly.vel.multiplyScalar(0.8);
-            // Анимация умывания передними лапками
-            fly.leftLeg.rotation.z = Math.sin(time * 20) * 0.8 + 0.5;
-            fly.rightLeg.rotation.z = -Math.sin(time * 20) * 0.8 - 0.5;
-            fly.stateTimer -= delta;
-            if (fly.stateTimer <= 0) fly.state = 'FLYING';
-          } else {
-            // Обычный полет
-            fly.leftLeg.rotation.z = 0.5;
-            fly.rightLeg.rotation.z = -0.5;
-
-            fly.vel.x += Math.sin(time * 4 + index) * 0.15;
-            fly.vel.y += Math.cos(time * 3 + index) * 0.15;
-            fly.vel.multiplyScalar(0.94);
-
-            const speed = fly.vel.length();
-            fly.leftWing.rotation.y = Math.sin(time * (40 + speed * 25)) * 0.5;
-            fly.rightWing.rotation.y = -Math.sin(time * (40 + speed * 25)) * 0.5;
-
-            if (speed > 0.1) fly.mesh.rotation.z = -Math.atan2(fly.vel.x, fly.vel.y);
-          }
-        }
-
-        fly.pos.add(fly.vel.clone().multiplyScalar(delta));
-
-        // Границы экрана и отскок
-        if (Math.abs(fly.pos.x) > boundX) {
-          fly.pos.x = Math.sign(fly.pos.x) * boundX;
-          fly.vel.x *= -0.7;
-        }
-        if (Math.abs(fly.pos.y) > boundY) {
-          fly.pos.y = Math.sign(fly.pos.y) * boundY;
-          fly.vel.y *= -0.7;
-        }
-
-        fly.mesh.position.copy(fly.pos);
-      });
-
-      if (flies.length > 0) {
-        document.getElementById('status').innerText = 
-          `🪰 МУХА: ${flies[0].state} | HP: ${Math.max(0, Math.round(flies[0].hp))}%`;
+        // Запихиваем ток в первых 20 нейронов
+        for (let i = 0; i < NUM_SENSORY / 2; i++) I_ext[i] += leftSensoryCurrent;
+        for (let i = NUM_SENSORY / 2; i < NUM_SENSORY; i++) I_ext[i] += rightSensoryCurrent;
       }
+
+      // 2. Просчет шага импульсной нейросети (SNN)
+      const spikesCount = updateSNN(delta);
+
+      // 3. Реакция тела на моторные спайки
+      if (motorSpikeActive) {
+        // Моторный нейрон выдал импульс -> резкий предвзлетный прыжок по физике!
+        const escapeDir = flyPos.clone().sub(pointerPos).normalize().add(new THREE.Vector3(0, 0.2, 0));
+        flyVel.add(escapeDir.multiplyScalar(6.0 * delta));
+        
+        leftWing.rotation.y = Math.sin(time * 60) * 0.7;
+        rightWing.rotation.y = -Math.sin(time * 60) * 0.7;
+        document.getElementById('brain-status').innerText = '⚠️ РЕФЛЕКС ВЗЛЁТА!';
+      } else {
+        // Обычный пассивный полет при низком потенциале
+        flyVel.x += Math.sin(time * 3) * 0.05;
+        flyVel.y += Math.cos(time * 2) * 0.05;
+        flyVel.multiplyScalar(0.95);
+        
+        leftWing.rotation.y = Math.sin(time * 15) * 0.2;
+        rightWing.rotation.y = -Math.sin(time * 15) * 0.2;
+        document.getElementById('brain-status').innerText = 'ПОКОЙ / ПОИСК';
+      }
+
+      flyPos.add(flyVel);
+      
+      // Границы
+      if (Math.abs(flyPos.x) > 3.5) { flyPos.x = Math.sign(flyPos.x) * 3.5; flyVel.x *= -0.5; }
+      if (Math.abs(flyPos.y) > 2.5) { flyPos.y = Math.sign(flyPos.y) * 2.5; flyVel.y *= -0.5; }
+
+      flyMesh.position.copy(flyPos);
+      if (flyVel.length() > 0.01) flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
+
+      // Телеметрия
+      document.getElementById('spike-rate').innerText = spikesCount * 30;
+      document.getElementById('sensory-val').innerText = `${leftSensoryCurrent.toFixed(1)} / ${rightSensoryCurrent.toFixed(1)}`;
+      document.getElementById('motor-val').innerText = motorSpikeActive ? 'SPIKE (HIGH)' : 'IDLE';
 
       renderer.render(scene, camera);
     }

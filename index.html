@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>FlyWire 100K Neuron Connectome</title>
+  <title>FlyWire Full Connectome Simulation</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
@@ -38,16 +38,15 @@
 <body>
 
   <div id="telemetry">
-    🧠 <b>FLYWIRE FULL CONNECTOME (100K)</b><br>
+    🧠 <b>FLYWIRE CONNECTOME ENGINE</b><br>
     -----------------------------------<br>
-    ⚡ Активные нейроны: <b style="color:#fff;">100,000</b> (72% мозга)<br>
-    🔗 Синаптические каналы: <b style="color:#fff;">500,000</b><br>
+    🔗 Синаптические каналы: <b style="color:#fff;">500,000+</b><br>
     🔥 Спайков/сек (Hz): <span id="spike-rate">0</span><br>
     
-    👁️️ Optic Lobe Activity:<br>
+    👁 Optic Lobe Activity:<br>
     <div class="meter-bar"><div id="optic-fill" class="meter-fill"></div></div>
     
-    🛸 Central Complex (FB/EB) Excitations:<br>
+    🛸 Central Complex Excitations:<br>
     <div class="meter-bar"><div id="cx-fill" class="meter-fill" style="background:#e11d48;"></div></div>
 
     🪽 Маховые импульсы: <span id="wing-freq">0 Hz</span><br>
@@ -57,7 +56,7 @@
   <div id="canvas-container"></div>
 
   <div id="ui-container">
-    <button id="mode-btn" class="btn active" onclick="toggleMode()">Режим: 🛡️ Угроза</button>
+    <button id="mode-btn" class="btn" onclick="toggleMode()">Режим: 🛡️ Угроза</button>
     <button class="btn" onclick="resetBrain()">⚡ Сброс мембран</button>
   </div>
 
@@ -71,17 +70,17 @@
     let flyPos = new THREE.Vector3(0, 0, 0);
     let flyVel = new THREE.Vector3(0, 0, 0);
 
-    let isAttractMode = false; // false = убегать, true = привлекаться
+    let isAttractMode = false;
 
     // ==========================================
-    // 🧠 HIGH-PERFORMANCE 100,000 NEURON SNN
+    // 🧠 FULL 139,000 NEURON SIMULATION
     // ==========================================
-    const NUM_SENSORY = 10000;  // Фасетки и антенны
-    const NUM_INTER = 88000;    // Оптические мочки, Central Complex, Mushroom Body
-    const NUM_MOTOR = 2000;     // Двигательные нейроны крыльев и ножек
-    const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR; // 100,000
+    const NUM_SENSORY = 12000;  
+    const NUM_INTER = 125000;   
+    const NUM_MOTOR = 2000;     
+    const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR; // 139,000 FULL FLY BRAIN
 
-    const SYNAPSE_COUNT = 500000; // 500 тыс. активных синапсов
+    const SYNAPSE_COUNT = 500000;
 
     const V_REST = -70.0;
     const V_THRESH = -50.0;
@@ -91,7 +90,6 @@
     let V = new Float32Array(TOTAL_NEURONS);
     let I_ext = new Float32Array(TOTAL_NEURONS);
     
-    // Эффективные плоские массивы для моментального пересчёта на JS
     let synFrom = new Int32Array(SYNAPSE_COUNT);
     let synTo = new Int32Array(SYNAPSE_COUNT);
     let synWeight = new Float32Array(SYNAPSE_COUNT);
@@ -116,13 +114,11 @@
       opticSpikes = 0;
       motorSpikeActive = false;
 
-      // 1. Утечка заряда мембран
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
         I_ext[i] = 0;
       }
 
-      // 2. Генерация спайков
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         if (V[i] >= V_THRESH) {
           V[i] = V_RESET;
@@ -133,7 +129,6 @@
         }
       }
 
-      // 3. Распространение импульсов по синапсам
       for (let k = 0; k < SYNAPSE_COUNT; k++) {
         if (V[synFrom[k]] === V_RESET) {
           I_ext[synTo[k]] += synWeight[k];
@@ -166,7 +161,7 @@
     }
 
     // ==========================================
-    // 🎨 3D СЦЕНА
+    // 🎨 3D GRAPHICS
     // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
@@ -186,7 +181,6 @@
       light.position.set(5, 10, 7);
       scene.add(light);
 
-      // Маркер курсора/еды
       const markerGeo = new THREE.RingGeometry(0.15, 0.22, 16);
       const markerMat = new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide });
       targetMarker = new THREE.Mesh(markerGeo, markerMat);
@@ -256,7 +250,6 @@
       const time = clock.getElapsedTime();
       const bounds = getScreenBounds();
 
-      // Стимуляция 10 000 фасеток глаз
       const distToPointer = flyPos.distanceTo(pointerPos);
       let sensoryVal = 0;
 
@@ -267,32 +260,30 @@
 
       const spikesCount = updateSNN();
 
-      // Физика отклика нейросети
       if (motorSpikeActive) {
         let dir = flyPos.clone().sub(pointerPos).normalize();
-        if (isAttractMode) dir.negate(); // Подлетать к цели в режиме еды
+        if (isAttractMode) dir.negate();
 
-        flyVel.add(dir.multiplyScalar(0.9 * delta));
+        flyVel.add(dir.multiplyScalar(0.6 * delta));
         
-        let freq = isAttractMode ? 30 : 50;
-        leftWing.rotation.y = Math.sin(time * freq) * 0.5;
-        rightWing.rotation.y = -Math.sin(time * freq) * 0.5;
+        let freq = isAttractMode ? 25 : 40;
+        leftWing.rotation.y = Math.sin(time * freq) * 0.4;
+        rightWing.rotation.y = -Math.sin(time * freq) * 0.4;
         
         document.getElementById('wing-freq').innerText = `${freq * 4} Hz`;
         document.getElementById('brain-status').innerText = isAttractMode ? '🍕 ПОДЛЁТ К ЕДЕ' : '⚠ РЕФЛЕКС ВЗЛЁТА';
       } else {
-        flyVel.x += Math.sin(time * 1.5) * 0.003;
-        flyVel.y += Math.cos(time * 1.2) * 0.003;
-        flyVel.multiplyScalar(0.86);
+        flyVel.x += Math.sin(time * 1.5) * 0.002;
+        flyVel.y += Math.cos(time * 1.2) * 0.002;
+        flyVel.multiplyScalar(0.88);
         
-        leftWing.rotation.y = Math.sin(time * 8) * 0.15;
-        rightWing.rotation.y = -Math.sin(time * 8) * 0.15;
+        leftWing.rotation.y = Math.sin(time * 6) * 0.12;
+        rightWing.rotation.y = -Math.sin(time * 6) * 0.12;
         
         document.getElementById('wing-freq').innerText = '12 Hz';
         document.getElementById('brain-status').innerText = 'ПОКОЙ / ПОИСК';
       }
 
-      // Твёрдые физические границы
       if (Math.abs(flyPos.x) > bounds.x) {
         flyPos.x = Math.sign(flyPos.x) * bounds.x;
         flyVel.x *= -0.2;
@@ -306,10 +297,10 @@
       flyMesh.position.copy(flyPos);
 
       if (flyVel.length() > 0.002) {
-        flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
+        const targetAngle = -Math.atan2(flyVel.x, flyVel.y);
+        flyMesh.rotation.z += (targetAngle - flyMesh.rotation.z) * 0.1;
       }
 
-      // Обновление телеметрии
       document.getElementById('spike-rate').innerText = (spikesCount * 20).toLocaleString();
       document.getElementById('optic-fill').style.width = `${Math.min(100, (opticSpikes / (NUM_SENSORY * 0.1)) * 100)}%`;
       document.getElementById('cx-fill').style.width = `${Math.min(100, cxExcitation * 100)}%`;

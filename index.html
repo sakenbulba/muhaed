@@ -3,41 +3,46 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Advanced Fly Sandbox</title>
+  <title>Ultimate Fly 3D Sandbox</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
-    * { touch-action: none; user-select: none; }
-    body { margin: 0; overflow: hidden; background: #08090d; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: white; }
+    * { touch-action: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; overflow: hidden; background: #1a1e29; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: white; }
     #canvas-container { width: 100vw; height: 100vh; }
     
+    /* Панель управления под Android */
     #ui {
-      position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%);
-      display: flex; gap: 6px; background: rgba(15, 20, 32, 0.9);
-      padding: 8px 12px; border-radius: 16px; backdrop-filter: blur(12px);
-      border: 1px solid rgba(255,255,255,0.1); max-width: 95vw; overflow-x: auto;
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 8px; background: rgba(26, 32, 48, 0.92);
+      padding: 10px 14px; border-radius: 20px; backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15); max-width: 92vw; overflow-x: auto;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
     }
     
     .btn {
-      background: #1a202c; border: 1px solid #2d3748; color: white;
-      padding: 8px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;
-      display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap;
+      background: #2a324b; border: 1px solid #3d486b; color: white;
+      padding: 12px 16px; border-radius: 14px; font-size: 13px; font-weight: 700;
+      display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap;
+      transition: all 0.1s ease;
     }
-    .btn.active { background: #3182ce; border-color: #63b3ed; }
-    .btn-shock { border-color: #e53e3e; } .btn-shock.active { background: #c53030; }
-    .btn-spray { border-color: #805ad5; } .btn-spray.active { background: #6b46c1; }
-    .btn-magnet { border-color: #dd6b20; } .btn-magnet.active { background: #c05621; }
+    .btn:active { transform: scale(0.95); }
+    .btn.active { background: #3b82f6; border-color: #60a5fa; }
+    .btn-shock { border-color: #ef4444; } .btn-shock.active { background: #dc2626; }
+    .btn-spray { border-color: #a855f7; } .btn-spray.active { background: #9333ea; }
+    .btn-magnet { border-color: #f97316; } .btn-magnet.active { background: #ea580c; }
 
     #status {
-      position: absolute; top: 12px; left: 12px;
-      background: rgba(0,0,0,0.7); padding: 6px 12px; border-radius: 8px;
-      font-size: 11px; border: 1px solid rgba(255,255,255,0.1); letter-spacing: 0.5px;
+      position: absolute; top: 15px; left: 15px;
+      background: rgba(15, 23, 42, 0.85); padding: 8px 14px; border-radius: 12px;
+      font-size: 12px; font-weight: 600; border: 1px solid rgba(255,255,255,0.1);
+      letter-spacing: 0.5px; backdrop-filter: blur(8px);
     }
   </style>
 </head>
 <body>
 
-  <div id="status">🧠 СОСТОЯНИЕ: НОРМА [HP: 100%]</div>
+  <div id="status">🧠 МУХА: 1 | HP: 100%</div>
   <div id="canvas-container"></div>
 
   <div id="ui">
@@ -45,8 +50,8 @@
     <button class="btn btn-shock" id="btn-shock" onclick="setMode('shock')">⚡ Шокер</button>
     <button class="btn btn-spray" id="btn-spray" onclick="setMode('spray')">💨 Спрей</button>
     <button class="btn btn-magnet" id="btn-magnet" onclick="setMode('magnet')">🧲 Магнит</button>
+    <button class="btn" onclick="respawnFly()">🔄 Респавн</button>
     <button class="btn" onclick="spawnFly()">🪰 +1 Муха</button>
-    <button class="btn" onclick="resetSim()">🔄 Сброс</button>
   </div>
 
   <script>
@@ -59,94 +64,121 @@
     let pointerPos = new THREE.Vector3();
     let effectParticles = null;
 
+    // Звуковой движок (Web Audio API)
+    let audioCtx = null;
+    let buzzOsc = null, buzzGain = null;
+
+    function initAudio() {
+      if (audioCtx) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Генератор жужжания
+      buzzOsc = audioCtx.createOscillator();
+      buzzGain = audioCtx.createGain();
+      buzzOsc.type = 'sawtooth';
+      buzzOsc.frequency.setValueAtTime(150, audioCtx.currentTime); // Базовая частота крыльев
+      buzzGain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+      buzzOsc.connect(buzzGain);
+      buzzGain.connect(audioCtx.destination);
+      buzzOsc.start();
+    }
+
+    function playShockSound() {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(300 + Math.random() * 500, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.15);
+    }
+
     function init() {
       const container = document.getElementById('canvas-container');
       clock = new THREE.Clock();
 
       scene = new THREE.Scene();
-      scene.fog = new THREE.FogExp2(0x08090d, 0.04);
+      scene.background = new THREE.Color(0x1a1e29); // Светлый контрастный фон
+      scene.fog = new THREE.FogExp2(0x1a1e29, 0.02);
 
       camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-      camera.position.set(0, 0, 7);
+      camera.position.set(0, 0, 12); // Расширенная камера
 
-      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+      renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       container.appendChild(renderer.domElement);
 
-      // Освещение (Студийный свет)
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-      scene.add(ambientLight);
-
-      const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
-      mainLight.position.set(5, 8, 5);
+      // Освещение сцены
+      scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+      const mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      mainLight.position.set(5, 12, 8);
       scene.add(mainLight);
 
-      const redRimLight = new THREE.PointLight(0xff2200, 1.5, 10);
-      redRimLight.position.set(-4, -2, -2);
-      scene.add(redRimLight);
+      // Добавляем сетку-ориентир на задний план
+      const grid = new THREE.GridHelper(30, 30, 0x3b82f6, 0x2a324b);
+      grid.rotation.x = Math.PI / 2;
+      grid.position.z = -5;
+      scene.add(grid);
 
-      // Спавним главную муху
       spawnFly();
 
-      window.addEventListener('pointerdown', handlePointer);
+      window.addEventListener('pointerdown', (e) => { initAudio(); handlePointer(e); });
       window.addEventListener('pointermove', (e) => { if (e.buttons > 0) handlePointer(e); });
       window.addEventListener('resize', onWindowResize);
 
       animate();
     }
 
-    // Создание детализированной модели мухи
-    function buildDetailedFly() {
+    // Правильная анатомическая 3D-модель мухи
+    function buildCorrectFly() {
       const flyGroup = new THREE.Group();
 
-      // Материалы
-      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x151518, roughness: 0.3, metalness: 0.8 });
-      const eyeMat = new THREE.MeshStandardMaterial({ color: 0x880000, roughness: 0.1, metalness: 0.1 });
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x111115, roughness: 0.4, metalness: 0.6 });
+      const eyeMat = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.2, metalness: 0.1 });
       const wingMat = new THREE.MeshPhysicalMaterial({
-        color: 0xffffff, transmission: 0.9, opacity: 1, transparent: true, roughness: 0.1, ior: 1.5
+        color: 0xe0f2fe, transmission: 0.85, transparent: true, opacity: 0.7, roughness: 0.1
       });
 
-      // Брюшко
-      const abdomen = new THREE.Mesh(new THREE.ConeGeometry(0.45, 0.9, 16), bodyMat);
-      abdomen.rotation.x = -Math.PI / 2.2;
-      abdomen.position.set(0, -0.1, -0.4);
+      // 1. Брюшко (сзади)
+      const abdomen = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 16), bodyMat);
+      abdomen.scale.set(0.9, 0.8, 1.4);
+      abdomen.position.set(0, 0, -0.6);
       flyGroup.add(abdomen);
 
-      // Грудь
-      const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), bodyMat);
-      thorax.scale.set(0.9, 0.8, 1.1);
+      // 2. Грудь (центр)
+      const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.45, 16, 16), bodyMat);
+      thorax.position.set(0, 0, 0);
       flyGroup.add(thorax);
 
-      // Голова
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 16, 16), bodyMat);
-      head.position.set(0, 0.05, 0.42);
+      // 3. Голова (спереди)
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 16), bodyMat);
+      head.position.set(0, 0, 0.5);
       flyGroup.add(head);
 
-      // Фасеточные глаза
-      const eyeGeo = new THREE.SphereGeometry(0.18, 12, 12);
+      // 4. Большие фасеточные глаза (по бокам головы)
+      const eyeGeo = new THREE.SphereGeometry(0.2, 12, 12);
       const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
-      leftEye.position.set(-0.2, 0.12, 0.48);
+      leftEye.position.set(-0.22, 0.1, 0.55);
       const rightEye = leftEye.clone();
-      rightEye.position.x = 0.2;
+      rightEye.position.x = 0.22;
       flyGroup.add(leftEye);
       flyGroup.add(rightEye);
 
-      // Крылья
-      const wingShape = new THREE.Shape();
-      wingShape.moveTo(0, 0);
-      wingShape.bezierCurveTo(0.2, 0.5, 0.4, 0.9, 0.1, 1.3);
-      wingShape.bezierCurveTo(-0.2, 1.1, -0.3, 0.5, 0, 0);
+      // 5. Крылья (Крепятся к груди СВЕРХУ)
+      const wingGeo = new THREE.BoxGeometry(0.7, 0.01, 1.2);
+      wingGeo.translate(0.35, 0, -0.5); // Центр вращения у основания крыла
 
-      const wingExtrude = new THREE.ShapeGeometry(wingShape);
-      const leftWing = new THREE.Mesh(wingExtrude, wingMat);
-      leftWing.position.set(-0.15, 0.25, -0.1);
-      leftWing.rotation.x = Math.PI / 2;
-      leftWing.rotation.y = -Math.PI / 6;
-
-      const rightWing = leftWing.clone();
-      rightWing.position.x = 0.15;
-      rightWing.rotation.y = Math.PI / 6;
+      const leftWing = new THREE.Mesh(wingGeo, wingMat);
+      leftWing.position.set(-0.1, 0.35, 0);
+      
+      const rightWing = new THREE.Mesh(wingGeo, wingMat);
+      rightWing.position.set(0.1, 0.35, 0);
+      rightWing.scale.x = -1; // Зеркальное крыло
 
       flyGroup.add(leftWing);
       flyGroup.add(rightWing);
@@ -164,20 +196,28 @@
     }
 
     function spawnFly() {
-      const flyData = buildDetailedFly();
-      flyData.pos.set((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, 0);
+      const flyData = buildCorrectFly();
+      flyData.pos.set((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, 0);
       scene.add(flyData.mesh);
       flies.push(flyData);
     }
 
+    function respawnFly() {
+      if (navigator.vibrate) navigator.vibrate(50);
+      flies.forEach(f => scene.remove(f.mesh));
+      flies = [];
+      spawnFly();
+    }
+
     function setMode(mode) {
       currentMode = mode;
+      if (navigator.vibrate) navigator.vibrate(30);
       document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
       document.getElementById(`btn-${mode}`).classList.add('active');
     }
 
     function handlePointer(e) {
-      if (e.clientY > window.innerHeight - 70) return;
+      if (e.clientY > window.innerHeight - 80) return;
 
       const vec = new THREE.Vector3(
         (e.clientX / window.innerWidth) * 2 - 1,
@@ -191,23 +231,20 @@
       flies.forEach(fly => {
         const d = fly.pos.distanceTo(pointerPos);
 
-        if (currentMode === 'touch' && d < 2.0) {
-          // Отталкивание
-          const force = fly.pos.clone().sub(pointerPos).normalize().multiplyScalar(5.0);
+        if (currentMode === 'touch' && d < 3.0) {
+          const force = fly.pos.clone().sub(pointerPos).normalize().multiplyScalar(7.0);
           fly.vel.add(force);
-        } else if (currentMode === 'shock' && d < 2.5) {
-          // Удар током
+        } else if (currentMode === 'shock' && d < 3.5) {
           fly.isShocked = true;
-          fly.shockTimer = 1.5;
-          fly.hp -= 15;
+          fly.shockTimer = 1.2;
+          fly.hp -= 12;
+          playShockSound();
           createLightning(pointerPos, fly.pos);
-        } else if (currentMode === 'spray' && d < 3.0) {
-          // Травля спреем
-          fly.hp -= 0.8;
-          fly.vel.add(new THREE.Vector3((Math.random()-0.5)*0.5, -0.5, 0));
+        } else if (currentMode === 'spray' && d < 4.0) {
+          fly.hp -= 1.0;
+          fly.vel.add(new THREE.Vector3((Math.random()-0.5)*1.5, -1.0, 0));
         } else if (currentMode === 'magnet') {
-          // Магнитная аномалия
-          const pull = pointerPos.clone().sub(fly.pos).normalize().multiplyScalar(3.0);
+          const pull = pointerPos.clone().sub(fly.pos).normalize().multiplyScalar(4.5);
           fly.vel.add(pull);
         }
       });
@@ -216,18 +253,14 @@
     function createLightning(p1, p2) {
       if (effectParticles) scene.remove(effectParticles);
       const geo = new THREE.BufferGeometry();
-      const points = [p1, new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5).add(new THREE.Vector3((Math.random()-0.5), (Math.random()-0.5), 0)), p2];
-      geo.setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 3 });
+      const mid = new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5).add(
+        new THREE.Vector3((Math.random()-0.5)*1.5, (Math.random()-0.5)*1.5, 0)
+      );
+      geo.setFromPoints([p1, mid, p2]);
+      const mat = new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 4 });
       effectParticles = new THREE.Line(geo, mat);
       scene.add(effectParticles);
-      setTimeout(() => { if (effectParticles) scene.remove(effectParticles); }, 100);
-    }
-
-    function resetSim() {
-      flies.forEach(f => scene.remove(f.mesh));
-      flies = [];
-      spawnFly();
+      setTimeout(() => { if (effectParticles) scene.remove(effectParticles); }, 80);
     }
 
     function animate() {
@@ -237,46 +270,58 @@
 
       flies.forEach((fly, index) => {
         if (fly.hp <= 0) {
-          // Мертвая муха падает вниз
-          fly.vel.y = -4.0;
+          fly.vel.y = -6.0; // Смертельное падение
           fly.mesh.rotation.x = Math.PI;
         } else if (fly.isShocked) {
-          // Судороги от тока
           fly.shockTimer -= delta;
-          fly.mesh.rotation.z += (Math.random() - 0.5) * 1.5;
-          fly.mesh.rotation.x += (Math.random() - 0.5) * 1.5;
+          fly.mesh.rotation.z += (Math.random() - 0.5) * 2.0;
           if (fly.shockTimer <= 0) fly.isShocked = false;
         } else {
-          // Естественный полет
-          fly.vel.x += Math.sin(time * 4 + index) * 0.1;
-          fly.vel.y += Math.cos(time * 3 + index) * 0.1;
-          fly.vel.multiplyScalar(0.94); // Трение
+          // Полёт и дрейф
+          fly.vel.x += Math.sin(time * 5 + index) * 0.2;
+          fly.vel.y += Math.cos(time * 4 + index) * 0.2;
+          fly.vel.multiplyScalar(0.93);
 
-          // Махи крыльев
-          const wingSpeed = 40 + fly.vel.length() * 15;
-          fly.leftWing.rotation.z = Math.sin(time * wingSpeed) * 0.5;
-          fly.rightWing.rotation.z = -Math.sin(time * wingSpeed) * 0.5;
+          // Анимация махов крыльев
+          const wingSpeed = 50 + fly.vel.length() * 25;
+          fly.leftWing.rotation.y = Math.sin(time * wingSpeed) * 0.6;
+          fly.rightWing.rotation.y = -Math.sin(time * wingSpeed) * 0.6;
 
-          // Поворот по движению
+          // Поворот тела по вектору движения
           if (fly.vel.length() > 0.1) {
             fly.mesh.rotation.z = -Math.atan2(fly.vel.x, fly.vel.y);
           }
         }
 
         fly.pos.add(fly.vel.clone().multiplyScalar(delta));
-        
-        // Ограничение стенками
-        fly.pos.x = THREE.MathUtils.clamp(fly.pos.x, -3.8, 3.8);
-        fly.pos.y = THREE.MathUtils.clamp(fly.pos.y, -2.8, 2.8);
-        
+
+        // Жесткие границы карты (Аквариум)
+        const BOUND_X = 6.5;
+        const BOUND_Y = 4.5;
+        if (Math.abs(fly.pos.x) > BOUND_X) {
+          fly.pos.x = Math.sign(fly.pos.x) * BOUND_X;
+          fly.vel.x *= -0.8; // Отскок от стены
+        }
+        if (Math.abs(fly.pos.y) > BOUND_Y) {
+          fly.pos.y = Math.sign(fly.pos.y) * BOUND_Y;
+          fly.vel.y *= -0.8;
+        }
+
         fly.mesh.position.copy(fly.pos);
       });
+
+      // Динамическая регулировка звука жужжания
+      if (buzzGain && flies.length > 0) {
+        const speed = flies[0].vel.length();
+        buzzGain.gain.setValueAtTime(flies[0].hp > 0 ? Math.min(0.08, 0.01 + speed * 0.01) : 0, audioCtx.currentTime);
+        buzzOsc.frequency.setValueAtTime(140 + speed * 15, audioCtx.currentTime);
+      }
 
       if (flies.length > 0) {
         document.getElementById('status').innerText = 
           `🧠 МУХ В СЦЕНЕ: ${flies.length} | HP ГЛАВНОЙ: ${Math.max(0, Math.round(flies[0].hp))}%`;
       }
-      
+
       renderer.render(scene, camera);
     }
 

@@ -59,50 +59,38 @@
     let flyVel = new THREE.Vector3(0, 0, 0);
 
     // ==========================================
-    // 🧠 УВЕЛИЧЕННАЯ НЕЙРОСЕТЬ SNN (512 НЕЙРОНОВ)
+    // 🧠 MASSIVE CONNECTOME SNN (5000 НЕЙРОНОВ)
     // ==========================================
-    const NUM_SENSORY = 120;  // Фасетки глаз (Optic Lobe)
-    const NUM_INTER = 380;    // Главные интернейроны (Lobula Plate & Central Complex)
-    const NUM_MOTOR = 12;     // Моторные нейроны крыльев и ориентации
+    const NUM_SENSORY = 800;   // Оптические фасетки
+    const NUM_INTER = 4100;    // Главные слои обработки
+    const NUM_MOTOR = 100;     // Моторные единицы
     const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR;
 
     const V_REST = -70.0;
-    const V_THRESH = -50.0;
+    const V_THRESH = -52.0;
     const V_RESET = -75.0;
-    const DECAY = 0.85;
+    const DECAY = 0.80; // Быстрый сброс заряда
 
     let V = new Float32Array(TOTAL_NEURONS);
     let I_ext = new Float32Array(TOTAL_NEURONS);
-    let W = [];
-    let totalSpikes = 0;
+    
+    // Оптимизированный разряженный граф синапсов (Sparse Synapses)
+    let synapseTargets = [];
+    let synapseWeights = [];
     let motorSpikeActive = false;
 
     function initConnectomeWeights() {
-      W = Array.from({ length: TOTAL_NEURONS }, () => new Float32Array(TOTAL_NEURONS));
+      synapseTargets = Array.from({ length: TOTAL_NEURONS }, () => []);
+      synapseWeights = Array.from({ length: TOTAL_NEURONS }, () => []);
 
-      // Глаза -> Интернейроны
-      for (let i = 0; i < NUM_SENSORY; i++) {
-        for (let j = NUM_SENSORY; j < NUM_SENSORY + NUM_INTER; j++) {
-          if (Math.random() < 0.15) { // 15% плотность синапсов
-            W[i][j] = Math.random() * 6.0 + 1.0;
-          }
-        }
-      }
-
-      // Внутренние связи слоёв мозга
-      for (let i = NUM_SENSORY; i < NUM_SENSORY + NUM_INTER; i++) {
-        for (let j = NUM_SENSORY; j < NUM_SENSORY + NUM_INTER; j++) {
-          if (i !== j && Math.random() < 0.08) {
-            W[i][j] = (Math.random() - 0.45) * 4.0;
-          }
-        }
-      }
-
-      // Интернейроны -> Моторная кора
-      for (let i = NUM_SENSORY; i < NUM_SENSORY + NUM_INTER; i++) {
-        for (let m = 0; m < NUM_MOTOR; m++) {
-          if (Math.random() < 0.2) {
-            W[i][NUM_SENSORY + NUM_INTER + m] = Math.random() * 8.0 + 2.0;
+      // Создаем ~50,000 синаптических связей
+      for (let i = 0; i < TOTAL_NEURONS; i++) {
+        let connections = i < NUM_SENSORY ? 15 : 10;
+        for (let c = 0; c < connections; c++) {
+          let target = Math.floor(Math.random() * (TOTAL_NEURONS - NUM_SENSORY)) + NUM_SENSORY;
+          if (target !== i) {
+            synapseTargets[i].push(target);
+            synapseWeights[i].push((Math.random() - 0.3) * 3.5);
           }
         }
       }
@@ -124,8 +112,10 @@
           V[i] = V_RESET;
           currentSpikes++;
 
-          for (let j = 0; j < TOTAL_NEURONS; j++) {
-            if (W[i][j] !== 0) I_ext[j] += W[i][j];
+          const targets = synapseTargets[i];
+          const weights = synapseWeights[i];
+          for (let k = 0; k < targets.length; k++) {
+            I_ext[targets[k]] += weights[k];
           }
 
           if (i >= NUM_SENSORY + NUM_INTER) {
@@ -134,7 +124,6 @@
         }
       }
 
-      totalSpikes += currentSpikes;
       return currentSpikes;
     }
 
@@ -222,75 +211,66 @@
       const vFOV = THREE.MathUtils.degToRad(camera.fov);
       const height = 2 * Math.tan(vFOV / 2) * camera.position.z;
       const width = height * camera.aspect;
-      return { x: (width / 2) - 0.5, y: (height / 2) - 0.8 };
+      return { x: (width / 2) - 0.4, y: (height / 2) - 0.6 };
     }
 
     function animate() {
       requestAnimationFrame(animate);
-      const delta = Math.min(clock.getDelta(), 0.1);
+      const delta = Math.min(clock.getDelta(), 0.05);
       const time = clock.getElapsedTime();
 
       const bounds = getScreenBounds();
 
-      // Стимуляция сенсорных нейронов глаз
+      // Стимуляция 800 сенсорных нейронов
       const distToPointer = flyPos.distanceTo(pointerPos);
-      let leftSensoryCurrent = 0, rightSensoryCurrent = 0;
+      let sensoryVal = 0;
 
-      if (distToPointer < 3.0) {
-        const stimulation = (3.0 - distToPointer) * 10.0;
-        leftSensoryCurrent = stimulation;
-        rightSensoryCurrent = stimulation;
-
-        for (let i = 0; i < NUM_SENSORY / 2; i++) I_ext[i] += leftSensoryCurrent;
-        for (let i = NUM_SENSORY / 2; i < NUM_SENSORY; i++) I_ext[i] += rightSensoryCurrent;
-      }
-
-      // Если близко к краю — подаём сигналы в нейроны разворота
-      if (Math.abs(flyPos.x) > bounds.x * 0.7 || Math.abs(flyPos.y) > bounds.y * 0.7) {
-        for (let i = 0; i < NUM_SENSORY; i++) I_ext[i] += 4.0;
+      if (distToPointer < 2.5) {
+        sensoryVal = (2.5 - distToPointer) * 4.0;
+        for (let i = 0; i < NUM_SENSORY; i++) I_ext[i] += sensoryVal;
       }
 
       const spikesCount = updateSNN(delta);
 
-      // Реакция на движения
+      // Умеренная физика движения (Вязкость)
       if (motorSpikeActive) {
         const escapeDir = flyPos.clone().sub(pointerPos).normalize();
-        flyVel.add(escapeDir.multiplyScalar(2.5 * delta)); // Умеренная скорость
+        flyVel.add(escapeDir.multiplyScalar(0.8 * delta)); // Плавное ускорение
         
-        leftWing.rotation.y = Math.sin(time * 50) * 0.6;
-        rightWing.rotation.y = -Math.sin(time * 50) * 0.6;
-        document.getElementById('brain-status').innerText = '⚠️️ РЕФЛЕКС ВЗЛЁТА!';
+        leftWing.rotation.y = Math.sin(time * 40) * 0.5;
+        rightWing.rotation.y = -Math.sin(time * 40) * 0.5;
+        document.getElementById('brain-status').innerText = '⚠ ВЗЛЁТ (SNN SPIKE)';
       } else {
-        // Плавающий пассивный полет
-        flyVel.x += Math.sin(time * 2.5) * 0.015;
-        flyVel.y += Math.cos(time * 2.0) * 0.015;
-        flyVel.multiplyScalar(0.92); // Торможение
+        // Спокойное парение
+        flyVel.x += Math.sin(time * 1.5) * 0.003;
+        flyVel.y += Math.cos(time * 1.2) * 0.003;
+        flyVel.multiplyScalar(0.85); // Сильное торможение воздуха
         
-        leftWing.rotation.y = Math.sin(time * 12) * 0.2;
-        rightWing.rotation.y = -Math.sin(time * 12) * 0.2;
-        document.getElementById('brain-status').innerText = 'ПОКОЙ / ПОИСК';
+        leftWing.rotation.y = Math.sin(time * 8) * 0.15;
+        rightWing.rotation.y = -Math.sin(time * 8) * 0.15;
+        document.getElementById('brain-status').innerText = 'ПОКОЙ / ДРЕЙФ';
       }
 
-      // Твёрдые физические границы с мягким возвратом
+      // Строгие границы
       if (Math.abs(flyPos.x) > bounds.x) {
         flyPos.x = Math.sign(flyPos.x) * bounds.x;
-        flyVel.x *= -0.3;
+        flyVel.x *= -0.2;
       }
       if (Math.abs(flyPos.y) > bounds.y) {
         flyPos.y = Math.sign(flyPos.y) * bounds.y;
-        flyVel.y *= -0.3;
+        flyVel.y *= -0.2;
       }
 
       flyPos.add(flyVel);
       flyMesh.position.copy(flyPos);
 
-      if (flyVel.length() > 0.005) {
+      if (flyVel.length() > 0.002) {
         flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
       }
 
-      // Обновление UI
+      // Телеметрия
       document.getElementById('spike-rate').innerText = spikesCount * 20;
-      document.getElementById('sensory-val').innerText = `${leftSensoryCurrent.toFixed(1)} / ${rightSensoryCurrent.toFixed(1)}`;
+      document.getElementById('sensory-val').innerText = `${sensoryVal.toFixed(1)} / ${sensoryVal.toFixed(1)}`;
       document.getElementById('motor-val').innerText = motorSpikeActive ? 'SPIKE' : 'IDLE';
 
       renderer.render(scene, camera);

@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Fly Brain 3D Sandbox</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    * { touch-action: none; user-select: none; }
+    body { margin: 0; overflow: hidden; background: #0f111a; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: white; }
+    #canvas-container { width: 100vw; height: 100vh; }
+    
+    /* Панель управления */
+    #ui {
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 8px; background: rgba(20, 25, 40, 0.85);
+      padding: 10px 14px; border-radius: 20px; backdrop-filter: blur(10px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1);
+      max-width: 90vw; overflow-x: auto;
+    }
+    
+    .btn {
+      background: #1e2436; border: 1px solid #2e3752; color: white;
+      padding: 10px 14px; border-radius: 12px; font-size: 13px; font-weight: 600;
+      display: flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap;
+    }
+    .btn.active { background: #3b82f6; border-color: #60a5fa; }
+    .btn-fire { border-color: #f97316; }
+    .btn-fire.active { background: #ea580c; }
+    .btn-food { border-color: #22c55e; }
+    .btn-food.active { background: #16a34a; }
+    
+    #status {
+      position: absolute; top: 15px; left: 15px;
+      background: rgba(0,0,0,0.6); padding: 8px 12px; border-radius: 10px;
+      font-size: 12px; font-weight: 500; border: 1px solid rgba(255,255,255,0.05);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="status">🧠 Нейронный режим: ИССЛЕДОВАНИЕ</div>
+  <div id="canvas-container"></div>
+
+  <div id="ui">
+    <button class="btn active" id="btn-touch" onclick="setMode('touch')">👈 Толкать пальцем</button>
+    <button class="btn btn-fire" id="btn-fire" onclick="setMode('fire')">🔥 Огонь</button>
+    <button class="btn btn-food" id="btn-food" onclick="setMode('food')">🍎 Еда</button>
+    <button class="btn" onclick="triggerFlyAction('swat')">💥 Мухобойка</button>
+    <button class="btn" onclick="triggerFlyAction('reset')">🔄 Сброс</button>
+  </div>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+
+    // Переменные Three.js
+    let scene, camera, renderer;
+    let fly, leftWing, rightWing;
+    let currentMode = 'touch';
+    let targetPos = new THREE.Vector3(0, 0, 0);
+    let flyPos = new THREE.Vector3(0, 0, 0);
+    let flyVelocity = new THREE.Vector3();
+    let fireParticles, foodMesh;
+    let clock = new THREE.Clock();
+
+    function init() {
+      const container = document.getElementById('canvas-container');
+      
+      scene = new THREE.Scene();
+      scene.fog = new THREE.FogExp2(0x0f111a, 0.05);
+
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 0, 8);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      // Освещение
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(5, 10, 7);
+      scene.add(dirLight);
+
+      // Создаем 3D-модель мухи из процедурных мешей
+      createFly();
+
+      // Обработчики касаний
+      window.addEventListener('pointerdown', handlePointer);
+      window.addEventListener('pointermove', (e) => { if (e.buttons > 0) handlePointer(e); });
+      window.addEventListener('resize', onWindowResize);
+
+      animate();
+    }
+
+    function createFly() {
+      fly = new THREE.Group();
+
+      // Тело (брюшко и грудь)
+      const bodyMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 });
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 16, 16), bodyMat);
+      body.scale.set(1, 0.8, 1.4);
+      fly.add(body);
+
+      // Глаза (красные фасеточные)
+      const eyeMat = new THREE.MeshStandardMaterial({ color: 0xcc1100, roughness: 0.2 });
+      const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 12), eyeMat);
+      leftEye.position.set(-0.28, 0.2, 0.55);
+      const rightEye = leftEye.clone();
+      rightEye.position.x = 0.28;
+      fly.add(leftEye);
+      fly.add(rightEye);
+
+      // Крылья
+      const wingMat = new THREE.MeshStandardMaterial({ 
+        color: 0x88ccff, transparent: true, opacity: 0.6, roughness: 0.1 
+      });
+      const wingGeo = new THREE.BoxGeometry(0.8, 0.01, 1.2);
+      wingGeo.translate(0.4, 0, 0.6); // Смещение центра вращения
+
+      leftWing = new THREE.Mesh(wingGeo, wingMat);
+      leftWing.position.set(-0.2, 0.3, 0);
+      rightWing = new THREE.Mesh(wingGeo, wingMat);
+      rightWing.position.set(0.2, 0.3, 0);
+      rightWing.rotation.y = Math.PI;
+
+      fly.add(leftWing);
+      fly.add(rightWing);
+
+      scene.add(fly);
+    }
+
+    function setMode(mode) {
+      currentMode = mode;
+      document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+      document.getElementById(`btn-${mode}`).classList.add('active');
+
+      if (mode !== 'fire' && fireParticles) scene.remove(fireParticles);
+      if (mode !== 'food' && foodMesh) scene.remove(foodMesh);
+    }
+
+    function handlePointer(event) {
+      // Игнорируем клики по панели интерфейса
+      if (event.clientY > window.innerHeight - 80) return;
+
+      const vec = new THREE.Vector3(
+        (event.clientX / window.innerWidth) * 2 - 1,
+        -(event.clientY / window.innerHeight) * 2 + 1,
+        0.5
+      );
+      vec.unproject(camera);
+      const dir = vec.sub(camera.position).normalize();
+      const distance = -camera.position.z / dir.z;
+      const pos = camera.position.clone().add(dir.multiplyScalar(distance));
+
+      targetPos.copy(pos);
+
+      if (currentMode === 'touch') {
+        // Касание пальцем: реакция убегания (Saccade)
+        document.getElementById('status').innerText = '🧠 Нейронный режим: ИЗБЕГАНИЕ ОПАСНОСТИ';
+        const escapeDir = flyPos.clone().sub(pos).normalize();
+        flyVelocity.add(escapeDir.multiplyScalar(3.0));
+      } else if (currentMode === 'fire') {
+        // Спавн огня
+        document.getElementById('status').innerText = '🧠 Нейронный режим: ПАНИКА (ИЗБЕГАНИЕ ТЕПЛА)';
+        createFire(pos);
+      } else if (currentMode === 'food') {
+        // Спавн еды
+        document.getElementById('status').innerText = '🧠 Нейронный режим: ПРИТЯЖЕНИЕ (ПОИСК ЕДЫ)';
+        createFood(pos);
+      }
+    }
+
+    function createFire(pos) {
+      if (fireParticles) scene.remove(fireParticles);
+      const geo = new THREE.BufferGeometry();
+      const count = 50;
+      const positions = new Float32Array(count * 3);
+      for (let i = 0; i < count * 3; i += 3) {
+        positions[i] = pos.x + (Math.random() - 0.5) * 0.5;
+        positions[i+1] = pos.y + (Math.random() - 0.5) * 0.5;
+        positions[i+2] = pos.z + (Math.random() - 0.5) * 0.5;
+      }
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.PointsMaterial({ color: 0xff4500, size: 0.2 });
+      fireParticles = new THREE.Points(geo, mat);
+      scene.add(fireParticles);
+    }
+
+    function createFood(pos) {
+      if (foodMesh) scene.remove(foodMesh);
+      const geo = new THREE.DodecahedronGeometry(0.3);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x22c55e });
+      foodMesh = new THREE.Mesh(geo, mat);
+      foodMesh.position.copy(pos);
+      scene.add(foodMesh);
+    }
+
+    function triggerFlyAction(action) {
+      if (action === 'swat') {
+        document.getElementById('status').innerText = '🧠 Нейронный режим: УДАР (ПАДЕНИЕ)';
+        flyVelocity.set((Math.random() - 0.5) * 5, -8, (Math.random() - 0.5) * 2);
+      } else if (action === 'reset') {
+        document.getElementById('status').innerText = '🧠 Нейронный режим: ИССЛЕДОВАНИЕ';
+        flyPos.set(0, 0, 0);
+        flyVelocity.set(0, 0, 0);
+        if (fireParticles) scene.remove(fireParticles);
+        if (foodMesh) scene.remove(foodMesh);
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      const time = clock.getElapsedTime();
+
+      // Логика поведения мухи
+      if (currentMode === 'fire' && fireParticles) {
+        // Улетает от огня
+        const dist = flyPos.distanceTo(targetPos);
+        if (dist < 4) {
+          const force = flyPos.clone().sub(targetPos).normalize().multiplyScalar(4.0 / (dist + 0.1));
+          flyVelocity.add(force.multiplyScalar(delta));
+        }
+      } else if (currentMode === 'food' && foodMesh) {
+        // Летит к еде
+        const dist = flyPos.distanceTo(foodMesh.position);
+        if (dist > 0.5) {
+          const force = foodMesh.position.clone().sub(flyPos).normalize().multiplyScalar(2.0);
+          flyVelocity.add(force.multiplyScalar(delta));
+        }
+      }
+
+      // Естественные колебания в воздухе (дрейф)
+      flyVelocity.x += Math.sin(time * 3) * 0.05;
+      flyVelocity.y += Math.cos(time * 2) * 0.05;
+
+      // Трение воздуха
+      flyVelocity.multiplyScalar(0.95);
+      flyPos.add(flyVelocity.clone().multiplyScalar(delta));
+
+      // Ограничение границ экрана
+      flyPos.x = THREE.MathUtils.clamp(flyPos.x, -4, 4);
+      flyPos.y = THREE.MathUtils.clamp(flyPos.y, -3, 3);
+
+      fly.position.copy(flyPos);
+
+      // Поворот мухи по направлению движения
+      if (flyVelocity.length() > 0.1) {
+        const angle = Math.atan2(flyVelocity.x, flyVelocity.y);
+        fly.rotation.z = -angle;
+      }
+
+      // Анимация махов крыльев (зависит от скорости)
+      const wingSpeed = 30 + flyVelocity.length() * 20;
+      leftWing.rotation.z = Math.sin(time * wingSpeed) * 0.4;
+      rightWing.rotation.z = -Math.sin(time * wingSpeed) * 0.4;
+
+      renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>

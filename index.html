@@ -33,7 +33,7 @@
 <body>
 
   <div id="telemetry">
-    ⚙️ <b>FLYWIRE CONNECTOME SNN</b><br>
+    ⚙️ <b>MAX CONNECTOME SNN</b><br>
     -------------------------<br>
     🧠 Активные нейроны: <span id="net-count">0</span><br>
     ⚡ Спайков/сек (Hz): <span id="spike-rate">0</span><br>
@@ -59,42 +59,46 @@
     let flyVel = new THREE.Vector3(0, 0, 0);
 
     // ==========================================
-    // 🧠 MASSIVE CONNECTOME SNN (5000 НЕЙРОНОВ)
+    // 🧠 MAX MOBILE SNN CONNECTOME (30,000 NEURONS)
     // ==========================================
-    const NUM_SENSORY = 800;   // Оптические фасетки
-    const NUM_INTER = 4100;    // Главные слои обработки
-    const NUM_MOTOR = 100;     // Моторные единицы
+    const NUM_SENSORY = 3000;   // Глазные фасетки (Optic Lobe)
+    const NUM_INTER = 26500;    // Основной мозг (Central Complex)
+    const NUM_MOTOR = 500;      // Моторные аксоны
     const TOTAL_NEURONS = NUM_SENSORY + NUM_INTER + NUM_MOTOR;
 
     const V_REST = -70.0;
     const V_THRESH = -52.0;
     const V_RESET = -75.0;
-    const DECAY = 0.80; // Быстрый сброс заряда
+    const DECAY = 0.82;
 
     let V = new Float32Array(TOTAL_NEURONS);
     let I_ext = new Float32Array(TOTAL_NEURONS);
     
-    // Оптимизированный разряженный граф синапсов (Sparse Synapses)
-    let synapseTargets = [];
-    let synapseWeights = [];
+    // Высокопроизводительные одномерные массивы для 150 000+ синапсов
+    let synFrom = new Int32Array(180000);
+    let synTo = new Int32Array(180000);
+    let synWeight = new Float32Array(180000);
+    let totalSynapses = 0;
+
     let motorSpikeActive = false;
 
     function initConnectomeWeights() {
-      synapseTargets = Array.from({ length: TOTAL_NEURONS }, () => []);
-      synapseWeights = Array.from({ length: TOTAL_NEURONS }, () => []);
-
-      // Создаем ~50,000 синаптических связей
+      let ptr = 0;
+      // Генерация 180,000 синаптических связей между слоями
       for (let i = 0; i < TOTAL_NEURONS; i++) {
-        let connections = i < NUM_SENSORY ? 15 : 10;
-        for (let c = 0; c < connections; c++) {
+        let connCount = i < NUM_SENSORY ? 8 : 5;
+        for (let c = 0; c < connCount; c++) {
+          if (ptr >= 180000) break;
           let target = Math.floor(Math.random() * (TOTAL_NEURONS - NUM_SENSORY)) + NUM_SENSORY;
           if (target !== i) {
-            synapseTargets[i].push(target);
-            synapseWeights[i].push((Math.random() - 0.3) * 3.5);
+            synFrom[ptr] = i;
+            synTo[ptr] = target;
+            synWeight[ptr] = (Math.random() - 0.35) * 3.0;
+            ptr++;
           }
         }
       }
-
+      totalSynapses = ptr;
       for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
     }
 
@@ -102,25 +106,26 @@
       let currentSpikes = 0;
       motorSpikeActive = false;
 
+      // 1. Утечка потенциала мембраны
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
         I_ext[i] = 0;
       }
 
+      // 2. Распространение спайков по быстрым массивам
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         if (V[i] >= V_THRESH) {
           V[i] = V_RESET;
           currentSpikes++;
+          if (i >= NUM_SENSORY + NUM_INTER) motorSpikeActive = true;
+        }
+      }
 
-          const targets = synapseTargets[i];
-          const weights = synapseWeights[i];
-          for (let k = 0; k < targets.length; k++) {
-            I_ext[targets[k]] += weights[k];
-          }
-
-          if (i >= NUM_SENSORY + NUM_INTER) {
-            motorSpikeActive = true;
-          }
+      // Передача импульсов по синапсам
+      for (let k = 0; k < totalSynapses; k++) {
+        let src = synFrom[k];
+        if (V[src] === V_RESET) { // Если источниковый нейрон сгенерировал спайк
+          I_ext[synTo[k]] += synWeight[k];
         }
       }
 
@@ -221,37 +226,34 @@
 
       const bounds = getScreenBounds();
 
-      // Стимуляция 800 сенсорных нейронов
+      // Раздражение 3000 сенсоров фасеток при приближении пальца
       const distToPointer = flyPos.distanceTo(pointerPos);
       let sensoryVal = 0;
 
       if (distToPointer < 2.5) {
-        sensoryVal = (2.5 - distToPointer) * 4.0;
+        sensoryVal = (2.5 - distToPointer) * 5.0;
         for (let i = 0; i < NUM_SENSORY; i++) I_ext[i] += sensoryVal;
       }
 
       const spikesCount = updateSNN(delta);
 
-      // Умеренная физика движения (Вязкость)
       if (motorSpikeActive) {
         const escapeDir = flyPos.clone().sub(pointerPos).normalize();
-        flyVel.add(escapeDir.multiplyScalar(0.8 * delta)); // Плавное ускорение
+        flyVel.add(escapeDir.multiplyScalar(0.9 * delta));
         
-        leftWing.rotation.y = Math.sin(time * 40) * 0.5;
-        rightWing.rotation.y = -Math.sin(time * 40) * 0.5;
-        document.getElementById('brain-status').innerText = '⚠ ВЗЛЁТ (SNN SPIKE)';
+        leftWing.rotation.y = Math.sin(time * 45) * 0.5;
+        rightWing.rotation.y = -Math.sin(time * 45) * 0.5;
+        document.getElementById('brain-status').innerText = '⚠ ВЗЛЁТ (30k SNN SPIKE)';
       } else {
-        // Спокойное парение
         flyVel.x += Math.sin(time * 1.5) * 0.003;
         flyVel.y += Math.cos(time * 1.2) * 0.003;
-        flyVel.multiplyScalar(0.85); // Сильное торможение воздуха
+        flyVel.multiplyScalar(0.85);
         
         leftWing.rotation.y = Math.sin(time * 8) * 0.15;
         rightWing.rotation.y = -Math.sin(time * 8) * 0.15;
         document.getElementById('brain-status').innerText = 'ПОКОЙ / ДРЕЙФ';
       }
 
-      // Строгие границы
       if (Math.abs(flyPos.x) > bounds.x) {
         flyPos.x = Math.sign(flyPos.x) * bounds.x;
         flyVel.x *= -0.2;
@@ -268,8 +270,7 @@
         flyMesh.rotation.z = -Math.atan2(flyVel.x, flyVel.y);
       }
 
-      // Телеметрия
-      document.getElementById('spike-rate').innerText = spikesCount * 20;
+      document.getElementById('spike-rate').innerText = spikesCount * 25;
       document.getElementById('sensory-val').innerText = `${sensoryVal.toFixed(1)} / ${sensoryVal.toFixed(1)}`;
       document.getElementById('motor-val').innerText = motorSpikeActive ? 'SPIKE' : 'IDLE';
 

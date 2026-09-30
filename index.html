@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>FlyWire STDP 3D Simulator</title>
+  <title>Pure Spiking Neural Network (SNN) Fly Engine</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
@@ -15,12 +15,12 @@
       position: absolute; top: 12px; left: 12px; z-index: 100;
       background: rgba(15, 23, 42, 0.85); padding: 14px; border-radius: 16px;
       border: 1px solid rgba(56, 189, 248, 0.25); font-size: 11px; line-height: 1.5;
-      max-width: 310px; pointer-events: none; backdrop-filter: blur(12px);
+      max-width: 320px; pointer-events: none; backdrop-filter: blur(12px);
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
     }
 
     .meter-bar { width: 100%; background: rgba(2, 6, 23, 0.9); height: 6px; border-radius: 3px; margin: 2px 0 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); }
-    .meter-fill { height: 100%; background: linear-gradient(90deg, #0284c7, #38bdf8); width: 0%; transition: width 0.1s; }
+    .meter-fill { height: 100%; background: linear-gradient(90deg, #0284c7, #38bdf8); width: 0%; transition: width 0.05s; }
 
     #ui-container {
       position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -39,22 +39,20 @@
 <body>
 
   <div id="telemetry">
-    <div style="font-size: 12px; font-weight: bold; color: #fff; margin-bottom: 4px;">🧠 STDP & CPG SNN ENGINE</div>
-    <div style="opacity: 0.6; font-size: 9px; margin-bottom: 8px;">LAYERING + AERODYNAMIC 3D FLIGHT</div>
+    <div style="font-size: 12px; font-weight: bold; color: #fff; margin-bottom: 4px;">🧠 PURE LIF SNN ENGINE (NO IF-ELSE CONTROL)</div>
+    <div style="opacity: 0.6; font-size: 9px; margin-bottom: 8px;">EMERGENT STEERING VIA LEAKY INTEGRATE-AND-FIRE</div>
     
-    ⚡ Спайков/сек: <b id="spike-rate" style="color:#38bdf8;">0</b><br>
-    🧬 Пластичность (STDP): <b id="stdp-rate" style="color:#22c55e;">Active</b><br>
+    ⚡ Частота спайков (Spikes/s): <b id="spike-rate" style="color:#38bdf8;">0</b><br>
     
-    👁 Optic Lobe L/R:
-    <div class="meter-bar"><div id="eye-fill" class="meter-fill"></div></div>
-    
-    🛸 Central Complex (CX):
-    <div class="meter-bar"><div id="cx-fill" class="meter-fill" style="background: linear-gradient(90deg, #e11d48, #fb7185);"></div></div>
+    📡 Sensory Input L / R (Current I_ext):
+    <div class="meter-bar"><div id="sensory-l-fill" class="meter-fill" style="background: #22c55e;"></div></div>
+    <div class="meter-bar"><div id="sensory-r-fill" class="meter-fill" style="background: #a855f7;"></div></div>
 
-    🪽 Моторная тяга (L/R):
-    <div class="meter-bar"><div id="motor-fill" class="meter-fill" style="background:#0284c7;"></div></div>
+    🪽 Motor Spike Rate L / R:
+    <div class="meter-bar"><div id="motor-l-fill" class="meter-fill" style="background:#0284c7;"></div></div>
+    <div class="meter-bar"><div id="motor-r-fill" class="meter-fill" style="background:#38bdf8;"></div></div>
 
-    📍 Полётная физика: <span id="brain-status" style="color:#38bdf8; font-weight:bold;">Airborne (CPG)</span>
+    📍 Режим SNN: <span id="flight-status" style="color:#38bdf8; font-weight:bold;">Emergent Flight Dynamics</span>
   </div>
 
   <div id="canvas-container"></div>
@@ -85,18 +83,19 @@
     let camRadius = 11, camTheta = Math.PI / 4, camPhi = Math.PI / 3;
 
     // ==========================================
-    // 🧠 ADVANCED LAYERED SNN + STDP ENGINE
+    // 🧠 PURE LEAKY INTEGRATE-AND-FIRE (LIF) SNN
     // ==========================================
-    const TOTAL_NEURONS = 100000;
-    const SYNAPSE_COUNT = 400000;
+    const TOTAL_NEURONS = 8000;
+    const SYNAPSE_COUNT = 40000;
 
-    const SENSORY_L     = 0;      // 0..4999 (Optic Lobe Left)
-    const SENSORY_R     = 5000;   // 5000..9999 (Optic Lobe Right)
-    const CENTRAL_CX    = 10000;  // 10000..69999 (Central Complex)
-    const CPG_PACEMAKER = 70000;  // 70000..79999 (Central Pattern Generator)
-    const MOTOR_L       = 80000;  // 80000..89999 (Left Wing Motor)
-    const MOTOR_R       = 90000;  // 90000..99999 (Right Wing Motor)
+    // Индексы анатомических популяций
+    const SENSORY_L_START = 0,    SENSORY_L_END = 999;
+    const SENSORY_R_START = 1000, SENSORY_R_END = 1999;
+    const CX_START        = 2000, CX_END        = 5999;
+    const MN_L_START      = 6000, MN_L_END      = 6999;
+    const MN_R_START      = 7000, MN_R_END      = 7999;
 
+    // LIF параметры
     const V_REST = -70.0, V_THRESH = -50.0, V_RESET = -75.0, DECAY = 0.85;
 
     let V = new Float32Array(TOTAL_NEURONS);
@@ -107,74 +106,86 @@
     let synTo = new Int32Array(SYNAPSE_COUNT);
     let synWeight = new Float32Array(SYNAPSE_COUNT);
 
-    let spikeCountOptic = 0, spikeCountCX = 0;
-    let spikeCountMotorL = 0, spikeCountMotorR = 0;
+    let spikeCounts = { sensoryL: 0, sensoryR: 0, motorL: 0, motorR: 0 };
+    let neuronSpikedThisFrame = new Uint8Array(TOTAL_NEURONS);
 
-    function initLayeredConnectome() {
-      for (let k = 0; k < SYNAPSE_COUNT; k++) {
-        let src = 0, dst = 0;
-        let layerType = Math.random();
+    function initPureConnectome() {
+      let synIdx = 0;
 
-        if (layerType < 0.4) {
-          src = Math.floor(Math.random() * 10000);
-          dst = CENTRAL_CX + Math.floor(Math.random() * 60000);
-        } else if (layerType < 0.7) {
-          src = CENTRAL_CX + Math.floor(Math.random() * 60000);
-          dst = (Math.random() < 0.5 ? MOTOR_L : MOTOR_R) + Math.floor(Math.random() * 10000);
-        } else {
-          src = CPG_PACEMAKER + Math.floor(Math.random() * 10000);
-          dst = (Math.random() < 0.5 ? MOTOR_L : MOTOR_R) + Math.floor(Math.random() * 10000);
+      function connectPopulations(srcStart, srcEnd, dstStart, dstEnd, meanWeight, count) {
+        for (let c = 0; c < count && synIdx < SYNAPSE_COUNT; c++) {
+          let src = srcStart + Math.floor(Math.random() * (srcEnd - srcStart));
+          let dst = dstStart + Math.floor(Math.random() * (dstEnd - dstStart));
+          synFrom[synIdx] = src;
+          synTo[synIdx] = dst;
+          synWeight[synIdx] = meanWeight + (Math.random() - 0.5) * 1.0;
+          synIdx++;
         }
-
-        synFrom[k] = src;
-        synTo[k] = dst;
-        synWeight[k] = (Math.random() - 0.2) * 2.0;
       }
 
+      // Прямые возбуждающие синапсы от левого сенсора к правому мотору и наоборот (перекрестная топология Braitenberg Vehicle)
+      connectPopulations(SENSORY_L_START, SENSORY_L_END, MN_R_START, MN_R_END, 3.8, 8000);
+      connectPopulations(SENSORY_R_START, SENSORY_R_END, MN_L_START, MN_L_END, 3.8, 8000);
+
+      // Прямые возбуждающие связи (для уклонения и балансировки)
+      connectPopulations(SENSORY_L_START, SENSORY_L_END, MN_L_START, MN_L_END, 1.2, 4000);
+      connectPopulations(SENSORY_R_START, SENSORY_R_END, MN_R_START, MN_R_END, 1.2, 4000);
+
+      // Связи с интернейронами Central Complex (CX) для поддержания фоновой активности и памяти
+      connectPopulations(SENSORY_L_START, SENSORY_L_END, CX_START, CX_END, 2.0, 5000);
+      connectPopulations(SENSORY_R_START, SENSORY_R_END, CX_START, CX_END, 2.0, 5000);
+      connectPopulations(CX_START, CX_END, MN_L_START, MN_L_END, 2.5, 5000);
+      connectPopulations(CX_START, CX_END, MN_R_START, MN_R_END, 2.5, 5000);
+
+      // Латеральное торможение внутри CX
+      connectPopulations(CX_START, CX_END, CX_START, CX_END, -1.5, 4000);
+
       for (let i = 0; i < TOTAL_NEURONS; i++) {
-        V[i] = V_REST;
+        V[i] = V_REST + (Math.random() - 0.5) * 5.0;
         lastSpikeTime[i] = -999;
       }
     }
 
+    // Чистый математический шаг LIF спайковой нейронной сети
     function stepSNN(currentTime) {
-      spikeCountOptic = 0; spikeCountCX = 0;
-      spikeCountMotorL = 0; spikeCountMotorR = 0;
+      neuronSpikedThisFrame.fill(0);
+      spikeCounts.sensoryL = 0; spikeCounts.sensoryR = 0;
+      spikeCounts.motorL = 0; spikeCounts.motorR = 0;
       let totalSpikes = 0;
 
-      let cpgSignal = Math.sin(currentTime * 30.0) > 0.2 ? 15.0 : 0;
-      for (let i = CPG_PACEMAKER; i < CPG_PACEMAKER + 2000; i += 5) {
-        I_ext[i] += cpgSignal;
-      }
-
+      // 1. Интегрирование мембранного потенциала
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
-        I_ext[i] = 0;
+        I_ext[i] = 0; // Сброс внешнего тока
       }
 
+      // 2. Генерация спайков (Порог V_THRESH)
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         if (V[i] >= V_THRESH) {
           V[i] = V_RESET;
           lastSpikeTime[i] = currentTime;
+          neuronSpikedThisFrame[i] = 1;
           totalSpikes++;
 
-          if (i < CENTRAL_CX) spikeCountOptic++;
-          else if (i < CPG_PACEMAKER) spikeCountCX++;
-          else if (i >= MOTOR_L && i < MOTOR_R) spikeCountMotorL++;
-          else if (i >= MOTOR_R) spikeCountMotorR++;
+          if (i <= SENSORY_L_END) spikeCounts.sensoryL++;
+          else if (i <= SENSORY_R_END) spikeCounts.sensoryR++;
+          else if (i >= MN_L_START && i <= MN_L_END) spikeCounts.motorL++;
+          else if (i >= MN_R_START && i <= MN_R_END) spikeCounts.motorR++;
         }
       }
 
+      // 3. Синаптическая передача сигналов и STDP пластичность
       for (let k = 0; k < SYNAPSE_COUNT; k++) {
         let src = synFrom[k];
         let dst = synTo[k];
 
-        if (V[src] === V_RESET) {
-          I_ext[dst] += synWeight[k];
+        if (neuronSpikedThisFrame[src]) {
+          I_ext[dst] += synWeight[k]; // Входной ток на постсинаптический нейрон
 
+          // STDP пластичность (Spike-Timing-Dependent Plasticity)
           let dt = currentTime - lastSpikeTime[dst];
           if (dt > 0 && dt < 0.02) {
-            synWeight[k] = Math.min(5.0, synWeight[k] + 0.05);
+            synWeight[k] = Math.min(6.0, synWeight[k] + 0.02);
           }
         }
       }
@@ -189,7 +200,7 @@
     }
 
     // ==========================================
-    // 🎨 3D СЦЕНА И ГОЛОГРАФИЧЕСКИЙ МОЗГ
+    // 🎨 THREE.JS ВИЗУАЛИЗАЦИЯ
     // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
@@ -214,8 +225,6 @@
       const dirLight = new THREE.DirectionalLight(0x38bdf8, 2.2);
       dirLight.position.set(10, 20, 10);
       dirLight.castShadow = true;
-      dirLight.shadow.mapSize.width = 2048;
-      dirLight.shadow.mapSize.height = 2048;
       scene.add(dirLight);
 
       const floorMat = new THREE.MeshStandardMaterial({ color: 0x030712, roughness: 0.5, metalness: 0.4 });
@@ -229,8 +238,8 @@
       scene.add(grid);
 
       buildDetailedFly();
-      build3DBrainHologram();
-      initLayeredConnectome();
+      buildSNNBrainParticles();
+      initPureConnectome();
 
       spawnObject('food', new THREE.Vector3(3, 0, 3));
       spawnObject('threat', new THREE.Vector3(-3, 0, -2));
@@ -246,18 +255,16 @@
     function buildDetailedFly() {
       const group = new THREE.Group();
       const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2, metalness: 0.8 });
-      const eyeMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.1, metalness: 0.3 });
+      const eyeMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.1 });
       const wingMat = new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.6, transmission: 0.8 });
 
       const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 16), bodyMat);
       thorax.scale.set(0.85, 0.75, 1.1);
-      thorax.castShadow = true;
       group.add(thorax);
 
       const abdomen = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), bodyMat);
       abdomen.position.set(0, -0.05, -0.6);
       abdomen.scale.set(0.8, 0.7, 1.4);
-      abdomen.castShadow = true;
       group.add(abdomen);
 
       const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 12), eyeMat);
@@ -278,20 +285,40 @@
       scene.add(flyMesh);
     }
 
-    function build3DBrainHologram() {
+    function buildSNNBrainParticles() {
       brainHologram = new THREE.Group();
-      const count = 1000;
-      const positions = new Float32Array(count * 3);
-      const colors = new Float32Array(count * 3);
+      const positions = new Float32Array(TOTAL_NEURONS * 3);
+      const colors = new Float32Array(TOTAL_NEURONS * 3);
 
-      for (let i = 0; i < count; i++) {
-        positions[i*3]     = (Math.random() - 0.5) * 0.9;
-        positions[i*3 + 1] = (Math.random() - 0.5) * 0.5;
-        positions[i*3 + 2] = (Math.random() - 0.5) * 0.7;
+      for (let i = 0; i < TOTAL_NEURONS; i++) {
+        let x = 0, y = 0, z = 0;
 
-        colors[i*3]     = 0.05;
-        colors[i*3 + 1] = 0.15;
-        colors[i*3 + 2] = 0.3;
+        if (i <= SENSORY_L_END) {
+          x = -0.25 + (Math.random() - 0.5) * 0.15;
+          y = (Math.random() - 0.5) * 0.15;
+          z = 0.2 + Math.random() * 0.15;
+        } else if (i <= SENSORY_R_END) {
+          x = 0.25 + (Math.random() - 0.5) * 0.15;
+          y = (Math.random() - 0.5) * 0.15;
+          z = 0.2 + Math.random() * 0.15;
+        } else if (i <= CX_END) {
+          x = (Math.random() - 0.5) * 0.3;
+          y = (Math.random() - 0.5) * 0.2;
+          z = (Math.random() - 0.5) * 0.2;
+        } else {
+          let side = i <= MN_L_END ? -1 : 1;
+          x = side * 0.2 + (Math.random() - 0.5) * 0.1;
+          y = (Math.random() - 0.5) * 0.15;
+          z = -0.2 - Math.random() * 0.15;
+        }
+
+        positions[i * 3]     = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = z;
+
+        colors[i * 3]     = 0.05;
+        colors[i * 3 + 1] = 0.15;
+        colors[i * 3 + 2] = 0.3;
       }
 
       brainGeo = new THREE.BufferGeometry();
@@ -299,10 +326,10 @@
       brainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
       const mat = new THREE.PointsMaterial({ 
-        size: 0.05, 
+        size: 0.04, 
         vertexColors: true, 
         transparent: true, 
-        opacity: 0.95,
+        opacity: 0.9,
         blending: THREE.AdditiveBlending 
       });
       
@@ -316,24 +343,19 @@
       parentGroup.position.copy(pos);
 
       if (type === 'food') {
-        const crystalMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.1, emissive: 0x15803d, emissiveIntensity: 0.4 });
-        for (let i = 0; i < 4; i++) {
-          const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.25), crystalMat);
-          m.position.set((Math.random() - 0.5) * 0.3, 0.2 + i * 0.15, (Math.random() - 0.5) * 0.3);
-          m.castShadow = true;
-          parentGroup.add(m);
-        }
+        const crystalMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, emissive: 0x15803d, emissiveIntensity: 0.5 });
+        const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3), crystalMat);
+        m.position.y = 0.3;
+        parentGroup.add(m);
       } else if (type === 'threat') {
         const coreMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xd97706, emissiveIntensity: 0.8 });
         const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 0), coreMat);
         core.position.y = 0.4;
-        core.castShadow = true;
         parentGroup.add(core);
       } else {
-        const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 });
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155 });
         const wall = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.2, 0.3), wallMat);
         wall.position.y = 0.6;
-        wall.castShadow = true;
         parentGroup.add(wall);
       }
 
@@ -381,104 +403,127 @@
     }
 
     // ==========================================
-    // 🔄 3D АЭРОДИНАМИЧЕСКИЙ ЦИКЛ ПОЛЁТА
+    // 🔄 ЧИСТЫЙ СИМУЛЯЦИОННЫЙ ЦИКЛ (SNN DRIVE)
     // ==========================================
     function animate() {
       requestAnimationFrame(animate);
       const delta = Math.min(clock.getDelta(), 0.05);
       const time = clock.getElapsedTime();
 
-      // Шум поискового поведения
-      I_ext[SENSORY_L + Math.floor(Math.random() * 1000)] += Math.random() * 12.0;
-      I_ext[SENSORY_R + Math.floor(Math.random() * 1000)] += Math.random() * 12.0;
+      // 1. Подача фонового шума в сеть (Биологический тонус / Поисковый драйв)
+      for (let i = 0; i < 50; i++) {
+        let randNeuron = Math.floor(Math.random() * TOTAL_NEURONS);
+        I_ext[randNeuron] += Math.random() * 12.0;
+      }
 
-      // Зрение
+      // 2. Без "IF-ELSE": Скалярное произведение превращает угол и расстояние в электрический ток I_ext
       let flyDir = new THREE.Vector3(Math.sin(flyRotY), 0, Math.cos(flyRotY));
       let flyLeftDir = new THREE.Vector3().crossVectors(flyDir, new THREE.Vector3(0, 1, 0)).negate();
+      let flyRightDir = flyLeftDir.clone().negate();
+
+      let currentSensoryL = 0, currentSensoryR = 0;
 
       objects.forEach(obj => {
         let toObj = new THREE.Vector3().subVectors(obj.position, flyPos);
         let dist = toObj.length();
-        if (dist < 8.0) {
-          toObj.normalize();
-          let dotLeft = flyLeftDir.dot(toObj);
-          let stim = (8.0 - dist) * 4.0;
-          if (obj.userData.type === 'threat') stim *= -3.0;
 
-          if (dotLeft > 0.1) {
-            for (let i = SENSORY_L; i < SENSORY_L + 2000; i += 10) I_ext[i] += stim;
-          } else {
-            for (let i = SENSORY_R; i < SENSORY_R + 2000; i += 10) I_ext[i] += stim;
-          }
+        if (dist < 10.0) {
+          toObj.normalize();
+          let weight = obj.userData.type === 'threat' ? -2.5 : 1.5; // Опасность даёт торможение/обратную фазу
+
+          // Проекция вектора объекта на левый и правый глаз мухи
+          let leftStimulus = Math.max(0, flyLeftDir.dot(toObj)) * (10.0 - dist) * 4.0 * weight;
+          let rightStimulus = Math.max(0, flyRightDir.dot(toObj)) * (10.0 - dist) * 4.0 * weight;
+
+          currentSensoryL += Math.abs(leftStimulus);
+          currentSensoryR += Math.abs(rightStimulus);
+
+          // Подача входа напрямую как непрерывный ток $I_{ext}$ на сенсорные популяционные нейроны
+          for (let i = SENSORY_L_START; i <= SENSORY_L_END; i += 10) I_ext[i] += leftStimulus;
+          for (let i = SENSORY_R_START; i <= SENSORY_R_END; i += 10) I_ext[i] += rightStimulus;
         }
       });
 
-      // Шаг SNN
+      // 3. Выполнение чистого шага LIF SNN
       let totalSpikes = stepSNN(time);
 
-      // Аэродинамика
-      let thrustL = spikeCountMotorL * 0.008;
-      let thrustR = spikeCountMotorR * 0.008;
+      // 4. Физика полета — полностью производное значение от частоты разряда моторных нейронов
+      let thrustL = spikeCounts.motorL * 0.005;
+      let thrustR = spikeCounts.motorR * 0.005;
 
-      flyRotY += (thrustL - thrustR) * 0.8;
-      let totalLift = (thrustL + thrustR) * 0.5;
+      // Руление (Yaw) определяется напрямую разностью нейронных спайков: Rate(MN_L) - Rate(MN_R)
+      let angularVelocity = (thrustL - thrustR) * 1.8;
+      flyRotY += angularVelocity * delta * 10;
 
-      let forwardThrust = Math.max(0.02, totalLift);
-      flyVel.x += Math.sin(flyRotY) * forwardThrust * delta * 10;
-      flyVel.z += Math.cos(flyRotY) * forwardThrust * delta * 10;
-      flyVel.y += (totalLift - 0.08) * delta * 5;
+      let forwardThrust = (thrustL + thrustR) * 0.5;
 
-      flyVel.multiplyScalar(0.92);
+      // Векторы движения
+      flyVel.x += Math.sin(flyRotY) * forwardThrust * delta * 8;
+      flyVel.z += Math.cos(flyRotY) * forwardThrust * delta * 8;
+      flyVel.y += (forwardThrust - 0.1) * delta * 4;
+
+      flyVel.multiplyScalar(0.91); // Трение воздуха
       flyPos.add(flyVel);
 
-      flyPos.y = Math.max(0.4, Math.min(6.0, flyPos.y));
+      // Границы
+      flyPos.y = Math.max(0.4, Math.min(6.5, flyPos.y));
       flyPos.x = Math.max(-14, Math.min(14, flyPos.x));
       flyPos.z = Math.max(-14, Math.min(14, flyPos.z));
 
-      flyRoll = (thrustR - thrustL) * 2.0;
+      // Крен и тангаж зависят только от асимметрии работы двигательных нейронов
+      flyRoll = -angularVelocity * 2.0;
       flyPitch = -flyVel.y * 1.5;
 
       flyMesh.position.copy(flyPos);
       flyMesh.rotation.set(flyPitch, flyRotY, flyRoll);
 
-      let wingFreq = 20 + totalLift * 100;
-      leftWing.rotation.y = Math.sin(time * wingFreq) * 0.5;
-      rightWing.rotation.y = -Math.sin(time * wingFreq) * 0.5;
+      // Частота взмахов крыльев управляется прямо от спайков моторных нейронов
+      let wingFreq = 20 + forwardThrust * 100;
+      leftWing.rotation.y = Math.sin(time * wingFreq) * (0.3 + thrustL);
+      rightWing.rotation.y = -Math.sin(time * wingFreq) * (0.3 + thrustR);
 
-      // Голограмма мозга
+      // 5. Отрисовка 3D спайков на голограмме
       brainHologram.position.copy(flyPos);
-      brainHologram.position.y += 0.9;
-      brainHologram.rotation.y = time * 0.5;
+      brainHologram.position.y += 0.95;
+      brainHologram.rotation.y = flyRotY;
 
-      // Обновление вспышек в 3D мозге
-      const colorAttr = brainGeo.attributes.color;
-      const colorsArr = colorAttr.array;
+      const colorsArr = brainGeo.attributes.color.array;
 
-      for (let i = 0; i < 1000; i++) {
-        let isSpiking = false;
-        
-        if (i < 200 && spikeCountOptic > 10) isSpiking = true;
-        else if (i >= 200 && i < 700 && spikeCountCX > 30) isSpiking = true;
-        else if (i >= 700 && (spikeCountMotorL > 5 || spikeCountMotorR > 5)) isSpiking = true;
-
-        if (isSpiking && Math.random() < 0.3) {
-          colorsArr[i * 3]     = 0.2;
-          colorsArr[i * 3 + 1] = 1.0;
-          colorsArr[i * 3 + 2] = 0.4;
+      for (let i = 0; i < TOTAL_NEURONS; i++) {
+        if (neuronSpikedThisFrame[i]) {
+          if (i <= SENSORY_R_END) {
+            colorsArr[i * 3]     = 0.2;
+            colorsArr[i * 3 + 1] = 1.0;
+            colorsArr[i * 3 + 2] = 0.4;
+          } else if (i <= CX_END) {
+            colorsArr[i * 3]     = 1.0;
+            colorsArr[i * 3 + 1] = 0.2;
+            colorsArr[i * 3 + 2] = 0.4;
+          } else {
+            colorsArr[i * 3]     = 0.1;
+            colorsArr[i * 3 + 1] = 0.7;
+            colorsArr[i * 3 + 2] = 1.0;
+          }
         } else {
-          colorsArr[i * 3]     *= 0.85;
-          colorsArr[i * 3 + 1] *= 0.85;
-          colorsArr[i * 3 + 2] = Math.max(0.2, colorsArr[i * 3 + 2] * 0.95);
+          colorsArr[i * 3]     *= 0.82;
+          colorsArr[i * 3 + 1] *= 0.82;
+          colorsArr[i * 3 + 2] = Math.max(0.15, colorsArr[i * 3 + 2] * 0.92);
         }
       }
-      colorAttr.needsUpdate = true;
+      brainGeo.attributes.color.needsUpdate = true;
 
       updateCameraPosition();
 
+      // UI
       document.getElementById('spike-rate').innerText = totalSpikes.toLocaleString();
-      document.getElementById('eye-fill').style.width = `${Math.min(100, spikeCountOptic / 10)}%`;
-      document.getElementById('cx-fill').style.width = `${Math.min(100, spikeCountCX / 20)}%`;
-      document.getElementById('motor-fill').style.width = `${Math.min(100, (spikeCountMotorL + spikeCountMotorR) / 2)}%`;
+      document.getElementById('sensory-l-fill').style.width = `${Math.min(100, currentSensoryL * 3)}%`;
+      document.getElementById('sensory-r-fill').style.width = `${Math.min(100, currentSensoryR * 3)}%`;
+      document.getElementById('motor-l-fill').style.width = `${Math.min(100, spikeCounts.motorL * 3)}%`;
+      document.getElementById('motor-r-fill').style.width = `${Math.min(100, spikeCounts.motorR * 3)}%`;
+
+      document.getElementById('flight-status').innerText = Math.abs(angularVelocity) > 0.05 
+        ? (angularVelocity > 0 ? "🔄 Спайковое руление Влево" : "🔄 Спайковое руление Вправо") 
+        : "✈️ Прямой полёт (SNN)";
 
       renderer.render(scene, camera);
     }

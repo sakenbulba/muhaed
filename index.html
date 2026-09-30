@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Pure SNN Connectome Fly Sandbox</title>
+  <title>FlyWire STDP 3D Simulator</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <style>
@@ -15,7 +15,7 @@
       position: absolute; top: 12px; left: 12px; z-index: 100;
       background: rgba(15, 23, 42, 0.85); padding: 14px; border-radius: 16px;
       border: 1px solid rgba(56, 189, 248, 0.25); font-size: 11px; line-height: 1.5;
-      max-width: 300px; pointer-events: none; backdrop-filter: blur(12px);
+      max-width: 310px; pointer-events: none; backdrop-filter: blur(12px);
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
     }
 
@@ -39,24 +39,22 @@
 <body>
 
   <div id="telemetry">
-    <div style="font-size: 12px; font-weight: bold; color: #fff; margin-bottom: 4px;">🧠 PURE SNN NEURO-ENGINE</div>
-    <div style="opacity: 0.6; font-size: 9px; margin-bottom: 8px;">100% SPONTANEOUS MOTOR SPIKES</div>
+    <div style="font-size: 12px; font-weight: bold; color: #fff; margin-bottom: 4px;">🧠 STDP & CPG SNN ENGINE</div>
+    <div style="opacity: 0.6; font-size: 9px; margin-bottom: 8px;">LAYERING + AERODYNAMIC 3D FLIGHT</div>
     
     ⚡ Спайков/сек: <b id="spike-rate" style="color:#38bdf8;">0</b><br>
+    🧬 Пластичность (STDP): <b id="stdp-rate" style="color:#22c55e;">Active</b><br>
     
-    👁 Левый глаз (Eye L):
-    <div class="meter-bar"><div id="eye-l-fill" class="meter-fill"></div></div>
+    👁 Optic Lobe L/R:
+    <div class="meter-bar"><div id="eye-fill" class="meter-fill"></div></div>
     
-    👁 Правый глаз (Eye R):
-    <div class="meter-bar"><div id="eye-r-fill" class="meter-fill"></div></div>
+    🛸 Central Complex (CX):
+    <div class="meter-bar"><div id="cx-fill" class="meter-fill" style="background: linear-gradient(90deg, #e11d48, #fb7185);"></div></div>
 
-    🪽 Мотор L (Поворот R):
-    <div class="meter-bar"><div id="motor-l-fill" class="meter-fill" style="background:#e11d48;"></div></div>
+    🪽 Моторная тяга (L/R):
+    <div class="meter-bar"><div id="motor-fill" class="meter-fill" style="background:#0284c7;"></div></div>
 
-    🪽 Мотор R (Поворот L):
-    <div class="meter-bar"><div id="motor-r-fill" class="meter-fill" style="background:#e11d48;"></div></div>
-
-    📍 Режим сети: <span id="brain-status" style="color:#38bdf8; font-weight:bold;">SNN Active</span>
+    📍 Полётная физика: <span id="brain-status" style="color:#38bdf8; font-weight:bold;">Airborne (CPG)</span>
   </div>
 
   <div id="canvas-container"></div>
@@ -74,85 +72,120 @@
 
     let scene, camera, renderer, clock;
     let flyMesh, leftWing, rightWing;
+    let brainHologram, brainParticles, brainGeo;
     let floorPlane, raycaster, mouse = new THREE.Vector2();
     let objects = []; 
     let currentTool = 'food';
 
-    let flyPos = new THREE.Vector3(0, 1.0, 0);
-    let flyRotY = 0;
-    let flySpeed = 0;
+    // Векторные переменные полёта
+    let flyPos = new THREE.Vector3(0, 2.0, 0);
+    let flyVel = new THREE.Vector3(0, 0, 0);
+    let flyRotY = 0, flyPitch = 0, flyRoll = 0;
 
     let isDragging = false, prevMouseX = 0, prevMouseY = 0;
     let camRadius = 11, camTheta = Math.PI / 4, camPhi = Math.PI / 3;
 
     // ==========================================
-    // 🧠 REAL BIOLOGICAL SNN ARCHITECTURE
+    // 🧠 ADVANCED LAYERED SNN + STDP ENGINE
     // ==========================================
     const TOTAL_NEURONS = 100000;
-    const SYNAPSE_COUNT = 500000;
+    const SYNAPSE_COUNT = 400000;
 
-    // Разделение нейронных популяций
-    const SENSORY_EYE_L = 0;      // 0..4999 (Левый глаз)
-    const SENSORY_EYE_R = 5000;   // 5000..9999 (Правый глаз)
-    const INTER_NEURONS = 10000;  // 10000..89999 (Коннектом мозолистого тела)
-    const MOTOR_L       = 90000;  // 90000..94999 (Двигатель левого крыла)
-    const MOTOR_R       = 95000;  // 95000..99999 (Двигатель правого крыла)
+    // Слои коннектома
+    const SENSORY_L     = 0;      // 0..4999 (Optic Lobe Left)
+    const SENSORY_R     = 5000;   // 5000..9999 (Optic Lobe Right)
+    const CENTRAL_CX    = 10000;  // 10000..69999 (Central Complex - Навигация/Память)
+    const CPG_PACEMAKER = 70000;  // 70000..79999 (Central Pattern Generator)
+    const MOTOR_L       = 80000;  // 80000..89999 (VNC Left Wing Motor)
+    const MOTOR_R       = 90000;  // 90000..99999 (VNC Right Wing Motor)
 
     const V_REST = -70.0, V_THRESH = -50.0, V_RESET = -75.0, DECAY = 0.85;
 
     let V = new Float32Array(TOTAL_NEURONS);
     let I_ext = new Float32Array(TOTAL_NEURONS);
+    let lastSpikeTime = new Float32Array(TOTAL_NEURONS);
+    
     let synFrom = new Int32Array(SYNAPSE_COUNT);
     let synTo = new Int32Array(SYNAPSE_COUNT);
     let synWeight = new Float32Array(SYNAPSE_COUNT);
 
-    let spikeCountEyeL = 0, spikeCountEyeR = 0;
+    let spikeCountOptic = 0, spikeCountCX = 0;
     let spikeCountMotorL = 0, spikeCountMotorR = 0;
 
-    function initBiologicalConnectome() {
+    function initLayeredConnectome() {
       for (let k = 0; k < SYNAPSE_COUNT; k++) {
-        let src = Math.floor(Math.random() * TOTAL_NEURONS);
-        let dst = Math.floor(Math.random() * TOTAL_NEURONS);
-        
+        let src = 0, dst = 0;
+        let layerType = Math.random();
+
+        if (layerType < 0.4) {
+          // Сетчатка -> Центральный Комплекс
+          src = Math.floor(Math.random() * 10000);
+          dst = CENTRAL_CX + Math.floor(Math.random() * 60000);
+        } else if (layerType < 0.7) {
+          // Центральный Комплекс -> Моторы
+          src = CENTRAL_CX + Math.floor(Math.random() * 60000);
+          dst = MOTOR_L + Math.floor(Math.random() * 20000);
+        } else {
+          // CPG Пейсмейкер -> Моторы
+          src = CPG_PACEMAKER + Math.floor(Math.random() * 10000);
+          dst = MOTOR_L + Math.floor(Math.random() * 20000);
+        }
+
         synFrom[k] = src;
         synTo[k] = dst;
-
-        // Перекрестные связи (Chiasm): сигналы с левого глаза передаются на правый мотор и наоборот
-        let w = (Math.random() - 0.2) * 2.0;
-        if (src < SENSORY_EYE_R && dst >= MOTOR_R) w *= 2.5; // Рефлекторная дуга
-        synWeight[k] = w;
+        synWeight[k] = (Math.random() - 0.2) * 2.0;
       }
-      for (let i = 0; i < TOTAL_NEURONS; i++) V[i] = V_REST;
+
+      for (let i = 0; i < TOTAL_NEURONS; i++) {
+        V[i] = V_REST;
+        lastSpikeTime[i] = -999;
+      }
     }
 
-    function stepSNN() {
-      spikeCountEyeL = 0; spikeCountEyeR = 0;
+    function stepSNN(currentTime) {
+      spikeCountOptic = 0; spikeCountCX = 0;
       spikeCountMotorL = 0; spikeCountMotorR = 0;
       let totalSpikes = 0;
 
-      // 1. Уравнение утечки мембранного потенциала (Leaky Integrate-and-Fire)
+      // CPG Пейсмейкер: генерирует базовый тонус полёта
+      let cpgSignal = Math.sin(currentTime * 30.0) > 0.2 ? 15.0 : 0;
+      for (let i = CPG_PACEMAKER; i < CPG_PACEMAKER + 2000; i += 5) {
+        I_ext[i] += cpgSignal;
+      }
+
+      // LIF интеграция
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         V[i] = V_REST + (V[i] - V_REST) * DECAY + I_ext[i];
         I_ext[i] = 0;
       }
 
-      // 2. Генерация спайков при достижении порога V_THRESH
+      // Генерация спайков
       for (let i = 0; i < TOTAL_NEURONS; i++) {
         if (V[i] >= V_THRESH) {
           V[i] = V_RESET;
+          lastSpikeTime[i] = currentTime;
           totalSpikes++;
 
-          if (i >= SENSORY_EYE_L && i < SENSORY_EYE_R) spikeCountEyeL++;
-          else if (i >= SENSORY_EYE_R && i < INTER_NEURONS) spikeCountEyeR++;
+          if (i < CENTRAL_CX) spikeCountOptic++;
+          else if (i < CPG_PACEMAKER) spikeCountCX++;
           else if (i >= MOTOR_L && i < MOTOR_R) spikeCountMotorL++;
           else if (i >= MOTOR_R) spikeCountMotorR++;
         }
       }
 
-      // 3. Передача синаптического тока следующему нейрону
+      // Передача импульсов и STDP Пластичность
       for (let k = 0; k < SYNAPSE_COUNT; k++) {
-        if (V[synFrom[k]] === V_RESET) {
-          I_ext[synTo[k]] += synWeight[k];
+        let src = synFrom[k];
+        let dst = synTo[k];
+
+        if (V[src] === V_RESET) {
+          I_ext[dst] += synWeight[k];
+
+          // STDP Обучение: укрепление синапса (LTP) при корреляции
+          let dt = currentTime - lastSpikeTime[dst];
+          if (dt > 0 && dt < 0.02) {
+            synWeight[k] = Math.min(5.0, synWeight[k] + 0.05);
+          }
         }
       }
 
@@ -166,7 +199,7 @@
     }
 
     // ==========================================
-    // 🎨 3D ВИЗУАЛИЗАЦИЯ И ДЕТАЛИЗИРОВАННЫЕ МОДЕЛИ
+    // 🎨 3D СЦЕНА И ГОЛОГРАФИЧЕСКИЙ МОЗГ
     // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
@@ -174,7 +207,7 @@
       raycaster = new THREE.Raycaster();
 
       scene = new THREE.Scene();
-      scene.fog = new THREE.FogExp2(0x020617, 0.04);
+      scene.fog = new THREE.FogExp2(0x020617, 0.035);
 
       camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
       updateCameraPosition();
@@ -195,7 +228,7 @@
       dirLight.shadow.mapSize.height = 2048;
       scene.add(dirLight);
 
-      // Голографический сетчатый пол
+      // Пол
       const floorMat = new THREE.MeshStandardMaterial({ color: 0x030712, roughness: 0.5, metalness: 0.4 });
       floorPlane = new THREE.Mesh(new THREE.PlaneGeometry(32, 32), floorMat);
       floorPlane.rotation.x = -Math.PI / 2;
@@ -206,8 +239,9 @@
       grid.position.y = 0.01;
       scene.add(grid);
 
-      buildHighDetailFly();
-      initBiologicalConnectome();
+      buildDetailedFly();
+      build3DBrainHologram();
+      initLayeredConnectome();
 
       spawnObject('food', new THREE.Vector3(3, 0, 3));
       spawnObject('threat', new THREE.Vector3(-3, 0, -2));
@@ -220,13 +254,12 @@
       animate();
     }
 
-    function buildHighDetailFly() {
+    function buildDetailedFly() {
       const group = new THREE.Group();
       const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2, metalness: 0.8 });
       const eyeMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.1, metalness: 0.3 });
-      const wingMat = new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.55, roughness: 0.1, transmission: 0.8 });
+      const wingMat = new THREE.MeshPhysicalMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.6, transmission: 0.8 });
 
-      // Анатомия дрозофилы
       const thorax = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 16), bodyMat);
       thorax.scale.set(0.85, 0.75, 1.1);
       thorax.castShadow = true;
@@ -243,7 +276,6 @@
       const eyeR = eyeL.clone(); eyeR.position.x = 0.16;
       group.add(eyeL); group.add(eyeR);
 
-      // Крылья
       const wingGeo = new THREE.BoxGeometry(0.45, 0.005, 0.8);
       wingGeo.translate(0.22, 0, -0.35);
       leftWing = new THREE.Mesh(wingGeo, wingMat);
@@ -257,36 +289,54 @@
       scene.add(flyMesh);
     }
 
-    // КРАСИВЫЕ 3D-МОДЕЛИ ДЛЯ ПЕСОЧНИЦЫ
+    // 3D Голограмма Мозга над мухой
+    function build3DBrainHologram() {
+      brainHologram = new THREE.Group();
+      const count = 300;
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+
+      for (let i = 0; i < count; i++) {
+        positions[i*3]     = (Math.random() - 0.5) * 0.8;
+        positions[i*3 + 1] = (Math.random() - 0.5) * 0.5;
+        positions[i*3 + 2] = (Math.random() - 0.5) * 0.6;
+
+        colors[i*3]     = 0.2;
+        colors[i*3 + 1] = 0.7;
+        colors[i*3 + 2] = 1.0;
+      }
+
+      brainGeo = new THREE.BufferGeometry();
+      brainGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      brainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const mat = new THREE.PointsMaterial({ size: 0.04, vertexColors: true, transparent: true, opacity: 0.8 });
+      brainParticles = new THREE.Points(brainGeo, mat);
+      
+      brainHologram.add(brainParticles);
+      scene.add(brainHologram);
+    }
+
     function spawnObject(type, pos) {
       const parentGroup = new THREE.Group();
       parentGroup.position.copy(pos);
 
       if (type === 'food') {
-        // Множественный кристаллообразный сахар
-        const crystalMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.1, metalness: 0.1, emissive: 0x15803d, emissiveIntensity: 0.4 });
-        for (let i = 0; i < 5; i++) {
-          const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.25 + Math.random() * 0.15), crystalMat);
-          m.position.set((Math.random() - 0.5) * 0.4, 0.2 + i * 0.15, (Math.random() - 0.5) * 0.4);
-          m.rotation.set(Math.random(), Math.random(), 0);
+        const crystalMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.1, emissive: 0x15803d, emissiveIntensity: 0.4 });
+        for (let i = 0; i < 4; i++) {
+          const m = new THREE.Mesh(new THREE.DodecahedronGeometry(0.25), crystalMat);
+          m.position.set((Math.random() - 0.5) * 0.3, 0.2 + i * 0.15, (Math.random() - 0.5) * 0.3);
           m.castShadow = true;
           parentGroup.add(m);
         }
       } else if (type === 'threat') {
-        // Опасная неоновая мина
         const coreMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xd97706, emissiveIntensity: 0.8 });
         const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 0), coreMat);
         core.position.y = 0.4;
         core.castShadow = true;
-        
-        const ringMat = new THREE.MeshBasicMaterial({ color: 0xef4444, wireframe: true });
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.02, 8, 24), ringMat);
-        ring.position.y = 0.4; ring.rotation.x = Math.PI / 2;
-        
-        parentGroup.add(core); parentGroup.add(ring);
+        parentGroup.add(core);
       } else {
-        // Кибер-стена / Перегородка
-        const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4, metalness: 0.6 });
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 });
         const wall = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.2, 0.3), wallMat);
         wall.position.y = 0.6;
         wall.castShadow = true;
@@ -337,77 +387,74 @@
     }
 
     // ==========================================
-    // 🔄 ЦИКЛ СИМУЛЯЦИИ (SNN DRIVEN PHYSICS)
+    // 🔄 3D АЭРОДИНАМИЧЕСКИЙ ЦИКЛ ПОЛЁТА
     // ==========================================
     function animate() {
       requestAnimationFrame(animate);
       const delta = Math.min(clock.getDelta(), 0.05);
       const time = clock.getElapsedTime();
 
-      // 1. СЕТЧАТКА (Оптический ввод в сенсорные нейроны)
-      // Муха смотрит по направлению своего вектора flyRotY
+      // Зрение
       let flyDir = new THREE.Vector3(Math.sin(flyRotY), 0, Math.cos(flyRotY));
-      let flyLeftDir = new THREE.Vector3().crossVectors(flyDir, new THREE.Vector3(0, 1, 0)).negate();
-
       objects.forEach(obj => {
         let toObj = new THREE.Vector3().subVectors(obj.position, flyPos);
         let dist = toObj.length();
-        if (dist < 8.0) {
-          toObj.normalize();
-          let dotForward = flyDir.dot(toObj);
-          let dotLeft = flyLeftDir.dot(toObj);
-
-          if (dotForward > 0) { // Объект в поле зрения
-            let intensity = (8.0 - dist) * 2.0;
-            if (obj.userData.type === 'threat') intensity *= -1.5; // Тормозящие синапсы
-
-            if (dotLeft > 0.1) {
-              // Попадает в левый глаз
-              for (let i = SENSORY_EYE_L; i < SENSORY_EYE_R; i += 10) I_ext[i] += intensity;
-            } else if (dotLeft < -0.1) {
-              // Попадает в правый глаз
-              for (let i = SENSORY_EYE_R; i < INTER_NEURONS; i += 10) I_ext[i] += intensity;
-            }
-          }
+        if (dist < 7.0) {
+          let stim = (7.0 - dist) * 2.0;
+          if (obj.userData.type === 'threat') stim *= -2.0;
+          for (let i = 0; i < 5000; i += 20) I_ext[i] += stim;
         }
       });
 
-      // 2. ОБСЧЕТ 100,000 НЕЙРОНОВ В РЕАЛЬНОМ ВРЕМЕНИ
-      let totalSpikes = stepSNN();
+      // Шаг SNN
+      let totalSpikes = stepSNN(time);
 
-      // 3. ФИЗИКА ДВИЖЕНИЯ, УПРАВЛЯЕМАЯ МОТОРНЫМИ НЕЙРОНАМИ
-      // Поворот зависит от разницы активностей Motor L и Motor R
-      let motorDiff = (spikeCountMotorL - spikeCountMotorR) * 0.005;
-      flyRotY += motorDiff;
+      // Аэродинамика полета на основе спайков моторов
+      let thrustL = spikeCountMotorL * 0.008;
+      let thrustR = spikeCountMotorR * 0.008;
 
-      // Поступательная скорость зависит от суммарной активности двигателей
-      let forwardDrive = (spikeCountMotorL + spikeCountMotorR) * 0.001;
-      flySpeed += (forwardDrive - flySpeed) * 0.1;
+      // Рыскание (Yaw) и Подъемная сила (Lift)
+      flyRotY += (thrustL - thrustR) * 0.8;
+      let totalLift = (thrustL + thrustR) * 0.5;
 
-      flyPos.x += Math.sin(flyRotY) * flySpeed;
-      flyPos.z += Math.cos(flyRotY) * flySpeed;
+      // Скорость и инерция
+      let forwardThrust = Math.max(0.02, totalLift);
+      flyVel.x += Math.sin(flyRotY) * forwardThrust * delta * 10;
+      flyVel.z += Math.cos(flyRotY) * forwardThrust * delta * 10;
+      flyVel.y += (totalLift - 0.08) * delta * 5; // Гравитация vs Подъёмная сила
 
-      // Ограничение по краям
+      flyVel.multiplyScalar(0.92); // Сопротивление воздуха
+      flyPos.add(flyVel);
+
+      // Ограничения по высоте и границам
+      flyPos.y = Math.max(0.4, Math.min(6.0, flyPos.y));
       flyPos.x = Math.max(-14, Math.min(14, flyPos.x));
       flyPos.z = Math.max(-14, Math.min(14, flyPos.z));
-      flyPos.y = 0.9 + Math.sin(time * 3) * 0.1;
+
+      // Крен (Roll) и Тангаж (Pitch)
+      flyRoll = (thrustR - thrustL) * 2.0;
+      flyPitch = -flyVel.y * 1.5;
 
       flyMesh.position.copy(flyPos);
-      flyMesh.rotation.y = flyRotY;
+      flyMesh.rotation.set(flyPitch, flyRotY, flyRoll);
 
-      // Крылья машут пропорционально выданным моторным спайкам
-      let wingFreq = 10 + (spikeCountMotorL + spikeCountMotorR) * 0.5;
-      leftWing.rotation.y = Math.sin(time * wingFreq) * 0.4;
-      rightWing.rotation.y = -Math.sin(time * wingFreq) * 0.4;
+      // Анимация крыльев
+      let wingFreq = 20 + totalLift * 100;
+      leftWing.rotation.y = Math.sin(time * wingFreq) * 0.5;
+      rightWing.rotation.y = -Math.sin(time * wingFreq) * 0.5;
+
+      // Голограмма мозга над мухой
+      brainHologram.position.copy(flyPos);
+      brainHologram.position.y += 0.9;
+      brainHologram.rotation.y = time * 0.5;
 
       updateCameraPosition();
 
-      // Обновление интерфейса
+      // UI
       document.getElementById('spike-rate').innerText = totalSpikes.toLocaleString();
-      document.getElementById('eye-l-fill').style.width = `${Math.min(100, spikeCountEyeL * 2)}%`;
-      document.getElementById('eye-r-fill').style.width = `${Math.min(100, spikeCountEyeR * 2)}%`;
-      document.getElementById('motor-l-fill').style.width = `${Math.min(100, spikeCountMotorL * 4)}%`;
-      document.getElementById('motor-r-fill').style.width = `${Math.min(100, spikeCountMotorR * 4)}%`;
+      document.getElementById('eye-fill').style.width = `${Math.min(100, spikeCountOptic / 10)}%`;
+      document.getElementById('cx-fill').style.width = `${Math.min(100, spikeCountCX / 20)}%`;
+      document.getElementById('motor-fill').style.width = `${Math.min(100, (spikeCountMotorL + spikeCountMotorR) / 2)}%`;
 
       renderer.render(scene, camera);
     }
